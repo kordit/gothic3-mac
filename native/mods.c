@@ -680,7 +680,19 @@ static uint32_t ent_from(X86 *c, Frame *f, uint32_t fn, uint32_t self) {
     return e;
 }
 
+/* Entity::GetPlayer keeps the hero in a static Entity (Script 10f96dc8) that its first call fills
+   by a path through type_info::name. From the GUI's paint during loading that path overflowed the
+   host stack in Script.dll's CRT error handling (session 2, crash report of 17:27), so the hero
+   is asked for only once the game has asked itself; before that he is None. */
+#define ENT_PLAYER_CACHE 0x10f96dc8u
+
 static uint32_t ent_player(X86 *c, Frame *f) {
+    if (!rd32(ENT_PLAYER_CACHE)) {
+        static int told;
+        if (!told++)
+            fprintf(stderr, "g3mods: g3fixes: the game has not asked for the hero yet, None until it does\n");
+        return ent_copy(c, f, ENT_NONE);
+    }
     const uint32_t e = frame_alloc(f, 0xa8);
     guest_call(c, ENT_PLAYER, &e, 1);
     return e;
