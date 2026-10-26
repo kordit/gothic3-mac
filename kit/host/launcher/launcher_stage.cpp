@@ -349,6 +349,31 @@ bool edit_text(std::string *text, const std::string &section, const std::string 
 
 } // namespace
 
+int seed_profile(const std::string &root, const std::string &profile,
+                 const std::vector<std::string> &seeds) {
+    int copied = 0;
+    for (const std::string &s : seeds) {
+        const size_t bar = s.find('|');
+        if (bar == std::string::npos)
+            continue;
+        const std::string dest = join(profile, s.substr(bar + 1));
+        OsStat st{};
+        if (os_stat(dest.c_str(), &st) == 0)
+            continue;
+        std::vector<uint8_t> bytes;
+        if (!read_all(resolve(root, s.substr(0, bar)), &bytes))
+            continue;
+        for (size_t i = dest.find('/', 1); i != std::string::npos; i = dest.find('/', i + 1))
+            os_mkdir(dest.substr(0, i).c_str());
+        if (write_all(dest + ".part", bytes) &&
+            os_rename((dest + ".part").c_str(), dest.c_str()) == 0)
+            ++copied;
+        else
+            os_unlink((dest + ".part").c_str());
+    }
+    return copied;
+}
+
 bool apply_ini_edits(const std::string &root, const std::vector<std::string> &edits,
                      std::string *error) {
     for (const std::string &e : edits) {

@@ -267,10 +267,11 @@ void Launcher::prepare_then_play(const std::vector<std::string> &edits) {
     }
     auto weak = std::weak_ptr<Shared>(shared_);
     Launcher *self = this;
-    const std::string root = info_.import_root;
+    const std::string root = info_.import_root, profile = info_.profile_dir;
     const std::vector<StageModule> modules = spec_.stage;
+    const std::vector<std::string> seeds = spec_.profile_seed;
     rebuild();
-    platform_.run_in_background([weak, self, root, modules, edits]() {
+    platform_.run_in_background([weak, self, root, profile, modules, edits, seeds]() {
         StageOutcome out;
         if (!apply_ini_edits(root, edits, &out.error))
             out.ok = false;
@@ -283,6 +284,8 @@ void Launcher::prepare_then_play(const std::vector<std::string> &edits) {
                 shared->progress.files_done = done;
                 shared->progress.files_total = total;
             });
+        if (out.ok && !profile.empty())
+            seed_profile(root, profile, seeds);
         auto shared = weak.lock();
         if (!shared)
             return;

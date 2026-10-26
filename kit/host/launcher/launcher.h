@@ -40,6 +40,8 @@ struct Spec {
     // Updates: the GitHub owner/name whose latest release is asked ("" = none) and the name of the
     // app's archive among its assets.
     std::string releases_repo, update_asset;
+    // "game file|profile file": copied into the profile after the game is prepared, when missing.
+    std::vector<std::string> profile_seed;
 };
 const Spec &spec_from_config();
 

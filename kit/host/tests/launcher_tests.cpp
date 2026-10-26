@@ -1176,6 +1176,18 @@ void test_stage() {
           why.find("cannot apply") == 0);
     CHECK(!apply_ini_edits(root, {"Ini/none.ini|S|K=V"}, &why) && why.find("cannot read") == 0);
     CHECK(!apply_ini_edits(root, {"no bars"}, &why));
+
+    // A profile gets the game's file once; what the player already has stays.
+    write_file(root + "/shader.cache", "compiled");
+    const std::string profile = fresh("seed-profile");
+    const std::vector<std::string> seeds = {"Shader.Cache|Documents/game/Shader.Cache",
+                                            "missing.bin|x/missing.bin"};
+    CHECK(seed_profile(root, profile, seeds) == 1);
+    CHECK(read_file(profile + "/Documents/game/Shader.Cache") == "compiled");
+    write_file(profile + "/Documents/game/Shader.Cache", "players own");
+    CHECK(seed_profile(root, profile, seeds) == 0);
+    CHECK(read_file(profile + "/Documents/game/Shader.Cache") == "players own");
+    CHECK(!exists(profile + "/x"));
 }
 
 #ifndef _WIN32
@@ -1237,6 +1249,7 @@ void test_ui_steam() {
                        {"Ini/game.ini|Lang|Audio=Voice", "Ini/mount.ini||+mount voice"},
                        {"Ini/game.ini|Lang|Audio=Base", "Ini/mount.ini||-mount voice"}}};
     s.steam.ini = {"Ini/game.ini|Lang|Text=Polish"};
+    s.profile_seed = {"readme.txt|Documents/game/seeded.txt"};
     write_file(home + "/src-1/Ini/game.ini", "[Lang]\r\nText=English\r\nAudio=Base\r\n[Other]\r\nx=1\r\n");
     write_file(home + "/src-1/Ini/mount.ini", "mount base");
     s.stage = {{"A.dll", "A.dll", "A.dll", sha_of(pe, dir + "/x"), "", 0x11000000,
@@ -1271,6 +1284,7 @@ void test_ui_steam() {
         CHECK(read_file(fp.pi.import_root + "/Ini/game.ini") ==
               "[Lang]\r\nText=Polish\r\nAudio=Voice\r\n[Other]\r\nx=1\r\n");
         CHECK(read_file(fp.pi.import_root + "/Ini/mount.ini") == "mount base\nmount voice");
+        CHECK(read_file(fp.pi.profile_dir + "/Documents/game/seeded.txt") == "keep");
         CHECK(read_file(home + "/account.txt") == "tester\n");
         const std::string first = read_file(home + "/args-1.txt"),
                           second = read_file(home + "/args-2.txt");

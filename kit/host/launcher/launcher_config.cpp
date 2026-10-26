@@ -56,6 +56,14 @@ const Spec &spec_from_config() {
         s.backdrop_seconds = RECOMP_LAUNCHER_BACKDROP_SECONDS;
 #endif
         s.steam = steam_spec_from_config();
+#ifdef RECOMP_LAUNCHER_PROFILE_SEED
+        {
+            std::istringstream lines(RECOMP_LAUNCHER_PROFILE_SEED);
+            for (std::string line; std::getline(lines, line);)
+                if (!line.empty())
+                    s.profile_seed.push_back(line);
+        }
+#endif
 #ifdef RECOMP_RELEASES_REPO
         s.releases_repo = RECOMP_RELEASES_REPO;
         s.update_asset = std::string(RECOMP_APP_NAME) + "-macOS.zip";

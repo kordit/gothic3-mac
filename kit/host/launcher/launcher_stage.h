@@ -50,4 +50,9 @@ StageOutcome stage_modules(const std::string &root, const std::vector<StageModul
 bool apply_ini_edits(const std::string &root, const std::vector<std::string> &edits,
                      std::string *error);
 
+// Each "game file|profile file" of `seeds`: the game's file (found without case under root) copied to
+// profile/<profile file> when that does not exist yet; the number copied.
+int seed_profile(const std::string &root, const std::string &profile,
+                 const std::vector<std::string> &seeds);
+
 } // namespace launcher

@@ -141,6 +141,8 @@ def render_header(cfg):
                                                 c_string("\n".join(d["ini_on"])), c_string("\n".join(d["ini_off"])))
         for d in steam["depots"]) or "{0u, 0, 0, 0, 0u, 0, 0, 0}"))
     lines.append("#define RECOMP_LAUNCHER_STEAM_INI %s" % c_string("\n".join(steam["ini"])))
+    lines.append("#define RECOMP_LAUNCHER_PROFILE_SEED %s" % c_string(
+        "\n".join(launcher_config.load_profile_seed(launcher, cfg["source"]))))
     # Modules the launcher makes from the player's files: {name, path beside the executable, from,
     # from_sha256, prepare, base, sha256 of the result}.
     tables = cfg.get("modules", {}).get("aux", {})

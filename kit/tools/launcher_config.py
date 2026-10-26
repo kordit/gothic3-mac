@@ -62,6 +62,20 @@ def check_ini_edits(edits, source):
                              % (source, e))
 
 
+def load_profile_seed(launcher, source):
+    """[launcher] profile_seed: "game file|profile file" pairs the launcher copies into the player's
+    profile after preparing the game, when the profile has none yet (Gothic 3: the install's
+    Shader.Cache, without which the first start compiles thousands of shaders)."""
+    seeds = launcher.get("profile_seed", [])
+    if not isinstance(seeds, list):
+        raise ValueError("%s: [launcher] profile_seed must be a list" % source)
+    for s in seeds:
+        parts = s.split("|") if isinstance(s, str) else []
+        if (len(parts) != 2 or not all(parts) or any(p.startswith("/") or ".." in p.split("/") for p in parts)):
+            raise ValueError('%s: [launcher] profile_seed entry %r is not "game file|profile file"' % (source, s))
+    return seeds
+
+
 def aux_stage(entry, source, key):
     """How the launcher makes a [modules.aux.<key>] module from the player's
     files: from (the install's file, '/' separated), from_sha256 (its pin) and
