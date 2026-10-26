@@ -1,0 +1,26 @@
+# The player's own game files and everything made from them.
+original/
+original-cp175/
+original-pl/
+stage/
+analysis/
+build/
+work/
+.venv/
+.playwright-cli/
+.DS_Store
+.tldr/
+analysis-run*.log
+entries-*.log
+.claude/
+.vscode/
+__pycache__/
+*.pyc
+downloads/
+
+# Working notes stay on this machine only (the repository is public since 26.10.2026).
+CLAUDE.md
+docs/*
+!docs/release-notes.md
+!docs/screens/
+kit/AGENTS.md

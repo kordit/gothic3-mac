@@ -1,0 +1,144 @@
+# stage.toml - which files of the player's own Gothic 3 install the port uses,
+# how each one is prepared, and where it lives in guest memory.
+#
+# Source pins are the Steam beta branch cpt_1.75_testbranch (app 39500, depot
+# 39501, build 1037180: Community Patch 1.75.14; docs/DECISIONS.md D-011).
+# tools/stage.py refuses any other file. Every DLL of this build carries
+# .reloc, so all of them are rebased, packed from 0x10000000 in this order.
+#
+# Guest layout (the kit caps guest memory at 0x7ffff000):
+#   0x00400000  Gothic3Final.exe at its own base
+#   0x01000000  kit heap, stack, TEB, import shims (up to 0x10000000)
+#   0x10000000  every module, 64 KB aligned, in this order
+#   (end)       extra guest heap up to 0x7ffff000 (game.toml)
+
+[source]
+steam_app = 39500
+steam_branch = "cpt_1.75_testbranch"
+steam_build = 1037180
+
+# The game itself; Gothic3.exe is only a launcher that starts it. No SteamStub on this branch.
+[[module]]
+name = "Gothic3Final.exe"
+src = "Gothic3Final.exe"
+sha256 = "5f1c521aeb89cdfd00919d5c48c1e29bb36c07d05c76af76ed55c486269211a0"
+
+[[module]]
+name = "SharedBase.dll"
+src = "SharedBase.dll"
+sha256 = "3087bb4e6c8c7f3bfcf87f79ba889a8c9df223cb71d977963e97dfb51206d4a4"
+base = 0x10000000
+
+[[module]]
+name = "Engine.dll"
+src = "Engine.dll"
+sha256 = "ac0fb50520deb4e9acde483d15f257492fc8158adc0cb7357dc88363a8ece54c"
+base = 0x10260000
+
+[[module]]
+name = "Game.dll"
+src = "Game.dll"
+sha256 = "4491a10cdd5908a6f6d9111e0bd5406add7a79901eeeb8d80f769858147a6ca4"
+base = 0x10910000
+
+[[module]]
+name = "FileSystem.dll"
+src = "FileSystem.dll"
+sha256 = "2aa50477552d760c3c2932e10c7f4adda1cc30c55866876602a1a20b8f1aab61"
+base = 0x10da0000
+
+[[module]]
+name = "GFC.dll"
+src = "GFC.dll"
+sha256 = "06e114d13ba2cbfb20c7397cf5d0dd18b77eebbbb505e8f2d865f6953efe3cbc"
+base = 0x10dd0000
+
+[[module]]
+name = "GUI.dll"
+src = "GUI.dll"
+sha256 = "7e194b5a6af6b8597ab0b417c5c1bd1042cf21541439602fc3ad50bbf8a064e4"
+base = 0x10e00000
+
+[[module]]
+name = "Importer.dll"
+src = "Importer.dll"
+sha256 = "a8696074ba2b0faffd9b70f85ff32eaaf3d679b755386e69e3cccaefe268e606"
+base = 0x10e80000
+
+[[module]]
+name = "Script.dll"
+src = "Script.dll"
+sha256 = "1f7477b13a94b241abdd31f07ce43991539592c6d1492a70a823c89e037623dc"
+base = 0x10f30000
+
+# The game logic; Game.dll loads Script*.dll from ".;.\\scripts".
+[[module]]
+name = "Script_Game.dll"
+src = "scripts/Script_Game.dll"
+dest = "scripts/Script_Game.dll"
+sha256 = "cdd9c46120abac49ebb6d53e5bed79512a528e5940238d6d88d150fe9aef3cdc"
+base = 0x10fb0000
+
+# Loaded by SharedBase.dll (error dialogs).
+[[module]]
+name = "Dialogs.dll"
+src = "Dialogs.dll"
+sha256 = "9a33fb8b9393fbaece093be56ffc6df082cad14b012daca8ba36de384868ceaf"
+base = 0x110f0000
+
+[[module]]
+name = "PhysXLoader.dll"
+src = "PhysXLoader.dll"
+sha256 = "84367e2385589f8cef6b686a4dbe56eab1b8c3cb1b5c6ef40bd5840d3c0b0e47"
+base = 0x11140000
+
+# Loaded by PhysXLoader.dll.
+[[module]]
+name = "PhysXCore.dll"
+src = "PhysXCore.dll"
+sha256 = "76aeb1cb08ff3437b95b84c8280db37f4350e17854d7c28fd06f2bc628332186"
+base = 0x11150000
+
+[[module]]
+name = "NxCooking.dll"
+src = "NxCooking.dll"
+sha256 = "02692f47e110e0d71e85f689cc7e86f59bc78269eccc112b34c3661db53fd33d"
+base = 0x112f0000
+
+[[module]]
+name = "fmodex.dll"
+src = "fmodex.dll"
+sha256 = "df3e611430ef9125bd5645eec62ed37c4bf7093b344e27556f3bccae6f9ceea0"
+base = 0x11350000
+
+# Engine.dll compiles HLSL with this D3DX; it ships in the install's DirectX redistributable.
+[[module]]
+name = "d3dx9_40.dll"
+src = "redist/DirectX/Nov2008_d3dx9_40_x86.cab"
+sha256 = "5f6dc0268e4dded33787348992883751e25cdf68fb7d4e6004ba15bc63a26afb"
+prepare = "cab:d3dx9_40.dll"
+base = 0x114a0000
+
+# d3dx9_40 imports 97 functions of the old system CRT (MSVCRT.DLL), which CP
+# 1.75.14 does not ship: the kit serves them (kit/runtime/msvcrt.cpp, D-019, D-020).
+
+# Modules end at 0x118ea000; the heap starts at 0x11930000, where MSVCRT.DLL ended.
+
+# Waste Data Patch 2.0 (D-013, milestone 0.8): world data without the invisible
+# objects under larger ones, repacked without compression. It replaces five
+# archives of CP 1.75.14's Data/ and never touches code. tools/g3pak.py diff
+# against CP: Templates change only by dropped strings (unused mesh and icon
+# references, the designers' German notes on NPCs, a stale gCLetter_PS beside
+# five books' gCBook_PS), no stat or property value. tools/stage.py extracts
+# the files from the archive into stage/Data instead of linking the install's.
+# `replaces` pins the CP file each one stands in for.
+[[data]]
+archive = "downloads/wastedata20/G3WD_V20.7z"
+archive_sha256 = "d7bea0701e3a1fc9490310796a31aa784cce2293e7216de08240181da354bc01"
+files = [
+  { src = "Templates.pak", dest = "Data/Templates.pak", sha256 = "da9dd51959353fe517f9109637968f36ca0728fb19471936269e3a014d0ef14a", replaces = "06d6cbce8ca5b363e12ed597dd4dd93131712f02ce6e46cbaf9f13dc46406034" },
+  { src = "Templates.cpt", dest = "Data/Templates.cpt", sha256 = "07e2fafe11b7d4a8ad2f6ecd6d85086f064064ef7c6577352b81e6a12c572974", replaces = "d5589b74e6d786d2227d03e077970a2ae9316093ec5941cd76a0b864d9996253" },
+  { src = "Projects_compiled.pak", dest = "Data/Projects_compiled.pak", sha256 = "ec2152e673da09bc0591528c4ace34a78ab25133d67ba67ab39317259d2d9297", replaces = "8fe5e3f5810f3648e527fe275a5ff45089b8fa91e1a90ed4b019fa97fffd2307" },
+  { src = "_compiledPhysic.pak", dest = "Data/_compiledPhysic.pak", sha256 = "f755939601b8f7a983c79ece1e1310aae431fd27aae43aaa6c28f56aea2271a5", replaces = "1a33e89fdb5bc9f80df5f14448b72699c4d49df1a2f5253abccbdc28746de6c8" },
+  { src = "_compiledMesh.p00", dest = "Data/_compiledMesh.p00", sha256 = "f19e03b67eb8f8fb1c015bf85ebeb32d564475e21d37b16bcd757902f538cae8", replaces = "6e9ca3de41a1c866194d7bfbed6dd17b4ecaaea0a1404d924e8c31115d8ca9f2" },
+]

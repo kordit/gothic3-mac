@@ -1,0 +1,41 @@
+#!/bin/sh
+# tools/bench.sh <label> [seconds] [mode] [trace.ctl lines...]: the port without a window (pop_smoke:
+# the real Metal renderer into an offscreen target, no audio device, no cursor capture), on the
+# autostart profile of <mode> (world = NoMenu, default; tools/run.py prepares it, so the player's
+# saves and options are untouched). FRAMES=10 from the start through its own control file
+# (work/bench-<label>.ctl; work/trace.ctl belongs to a game the player runs). Log
+# work/bench-<label>.log; stopped after <seconds> (default 240) by PID.
+cd "$(dirname "$0")/.."
+label=$1
+secs=${2:-240}
+mode=${3:-world}
+shift 3 2>/dev/null || shift $#
+ctl="$PWD/work/bench-$label.ctl"
+printf 'FRAMES=10\n' > "$ctl"
+for line in "$@"; do printf '%s\n' "$line" >> "$ctl"; done
+script="$PWD/work/bench-$label.smoke"
+# BENCH_STEPS: smoke script lines run first (kit/host/script.h), e.g. the clicks that start a new game.
+# G3_INI_SET="Key=value,...": ge3.ini keys for this run (tools/run.py prepare_profile).
+# BENCH_BIN: another pop_smoke binary for an A/B (default build/recomp/pop_smoke).
+printf '%b' "${BENCH_STEPS:-}" > "$script"
+printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$script"
+# BENCH_PROFILE=<dir>: a profile of its own (two benches at once, an A/B under the same load), prepared as <mode>'s.
+profile=$(.venv/bin/python -c "import os, sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode', os.environ.get('BENCH_PROFILE') or None))")
+# BENCH_MODS=1: the player's mods (build/recomp/profile/active-mods.json: World Texture Mix, Animations
+# Redone, ...) linked into the bench profile as the launcher does; otherwise the profile runs unmodded.
+if [ "${BENCH_MODS:-0}" = 1 ]; then cp build/recomp/profile/active-mods.json "$profile/active-mods.json"; else rm -f "$profile/active-mods.json"; fi
+.venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.build_mod_view('$profile')" >&2
+# The new game's intro (G3_Intro.bik, 5354 frames, about 214 s) skipped as tools/run.py does for newgame;
+# without it a scripted new game sat at 1 draw per frame for the whole run.
+RECOMP_BINK_SKIP="${RECOMP_BINK_SKIP-G3_Intro}" \
+RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
+  RECOMP_TRACE_CONTROL="$ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE="${BENCH_DRAWABLE:-1920x1200}" \
+  nohup "${BENCH_BIN:-build/recomp/pop_smoke}" --script "$script" > "work/bench-$label.log" 2>&1 &
+pid=$!
+echo "$pid" > "work/bench-$label.pid"
+end=$(( $(date +%s) + secs + 30 ))
+while kill -0 "$pid" 2>/dev/null && [ "$(date +%s)" -lt "$end" ]; do sleep 5; done
+kill "$pid" 2>/dev/null
+sleep 4
+kill -9 "$pid" 2>/dev/null
+grep "frames, last" "work/bench-$label.log" | tail -12

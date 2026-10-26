@@ -1,0 +1,335 @@
+# game.toml - what the kit needs to know about Gothic 3 (Steam beta cpt_1.75_testbranch, build 1037180)
+# that is not derivable from the binaries. Addresses are guest addresses in the
+# staged modules (tools/stage.py, stage.toml). Values marked "sentinel" are not
+# identified yet: they point into the zero-filled tail of Gothic3Final.exe's
+# .data (0x00427660-0x00427fff), which the game never references, so the kit's
+# Populous-shaped hooks compile and never fire.
+
+[game]
+id = "gothic3"
+name = "Gothic 3"
+app_name = "Gothic3Recomp"
+data_dir_name = "Gothic 3 Native"
+bundle_id = "dev.recompkit.gothic3"
+executable = "Gothic3Final.exe"
+# Community Patch 1.75.14; Gothic3.exe is only its launcher.
+sha256 = "5f1c521aeb89cdfd00919d5c48c1e29bb36c07d05c76af76ed55c486269211a0"
+image_base = 0x00400000
+entry_point = 0x00406275
+guest_root = 'C:\Program Files\Gothic 3'
+developer_exe = "stage/Gothic3Final.exe"
+windows_version = "5.1.2600"
+qpc_us = true
+# GlobalMemoryStatusEx's RAM: below 1436 MB eCApplication::GetOptimalCacheSizes (Engine 10274a80) takes
+# its smallest resource caches and the world's meshes are evicted as they load (D-024).
+physical_memory_mb = 2048
+# FMOD Ex's mixer, output and stream threads run without the baton (D-026, 25.10.2026: combat 37.7 -> 34.9 ms).
+free_threads = "fmodex.dll"
+# Gothic3Final.exe is large address aware: on 64-bit Windows it sees 4 GB of virtual memory and sizes its resource
+# caches by it (D-028).
+virtual_memory_mb = 4096
+# 4 GB, what the large-address-aware Gothic3Final.exe gets on 64-bit Windows (D-022): with 2 GB a new game ran out
+# of heap while loading the world. The modules end at 0x118ea000 (MSVCRT.DLL, which ended at 0x11930000, is gone:
+# D-020); the rest above them is guest heap (the modules' own CRTs allocate from it).
+guest_size = 0xffff0000
+heap_extra_base = 0x11930000
+heap_extra_size = 0xee6c0000
+
+[game.adapter]
+modes = "list"
+
+[translate]
+listings = "analysis/Gothic3Final.exe"
+globals = "globals.toml"
+# Sentinel: no audited animation counter.
+animation_counter = 0x00427f00
+volatile_reads = []
+# Gothic 3 imports d3d9 only, never DirectDraw.
+store_hooks = false
+# Flags only where the body reads them, dead before a CALL and at a RET as MSVC's calling convention has them
+# (kit translate.py liveness_abi; PhysXCore: 197k flag writes -> 30k, the same 4 split-off entries --check-flags lists).
+flags_abi = true
+# x87 values a body pushes stay in C locals until a call, a return, a jump out or an instruction that needs the
+# stack in the context (kit translate.py x87_virtual, D-031; Engine: 6319 of 6725 x87 operations).
+x87_locals = true
+# Every indirect CALL keeps its last target (kit x86.h recomp_call_cached): imports between the DLLs
+# and vtable calls were about a quarter of the samples while the game loads (D-023).
+inline_call_cache = true
+# Native replacements for hot game functions (native/g3_overrides.h, switched by G3OPT in
+# trace.ctl, native/g3_opt.c). The header goes to every module; the sources build into the exe's
+# library. Changing the header recompiles every module, the sources alone do not.
+overrides = "native/g3_overrides.h"
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+
+[hooks]
+# Sentinels.
+frame_clock_begin = 0x00427f10
+frame_clock_wait = 0x00427f14
+frame_clock_wait_clamp = 0x00427f18
+frame_clock_clamp_deadline = 0x00427f20
+frame_clock_wait_deadline = 0x00427f24
+cursor_surface_ptrs = [0x00427f30, 0x00427f34]
+mouse_vtable = 0x00427f40
+mouse_device_ptr = 0x00427f44
+mouse_device_right = 0x00427f48
+camera = 0x00427f50
+sprites = []
+
+[mods]
+builtin = "none"
+
+[settings]
+rows = ["window", "frame_limit", "performance_overlay", "controls"]
+
+[controls]
+default_layout = "hidden"
+pad = "mapped"
+
+[launcher]
+title = "Gothic 3"
+store = "https://store.steampowered.com/app/39500/"
+# Updates: the launcher installs the latest release's Gothic3Recomp-macOS.zip (tools/release.sh).
+releases_repo = "kordit/gothic3-mac"
+steam_ids = ["39500"]
+install_names = ["Gothic 3", "Gothic III"]
+min_free_mb = 500
+# The launcher's "Mody (Sefaris)" screen reads this Sefaris Mod Manager catalog; the screen can point it elsewhere.
+sefaris_dir = "~/Downloads/G3_Mods"
+# Script mods redone in native/mods.c: shown as built in and always on (G3_NATIVE_MODS=none turns them off).
+native_dlls = ["Script_FontScale.dll", "Script_Subtitles.dll"]
+# The launcher's look (subtitle: the line under "ready to play"): Polish, the game's own font from the player's game folder for titles, a macOS serif for
+# text, and a frame of the intro (the ship at sunset, before the credits) as the backdrop. Nothing is bundled.
+language = "pl"
+banner = "GOTHIC III"
+subtitle = "Community Patch 1.75"
+font_display = ["Gothic3.ttf"]
+font_body = ["/System/Library/Fonts/Supplemental/Hoefler Text.ttc#0", "/System/Library/Fonts/Supplemental/Baskerville.ttc#0"]
+font_strong = ["/System/Library/Fonts/Supplemental/Baskerville.ttc#4", "/System/Library/Fonts/Supplemental/Hoefler Text.ttc#1"]
+backdrop_video = "Data/Video/G3_Intro.bik"
+backdrop_seconds = 40.8
+
+# The game from the player's Steam account (D-037): DepotDownloader beside the app's executable, logged in with a QR
+# code or a password. CP 1.75.14 without redist/ (but the cabinet d3dx9_40 comes from) and modkit/; Polish speech
+# alone from the public Polish depot, whose other files are 1.6's and would replace CP's.
+[launcher.steam]
+tool = "DepotDownloader"
+tool_url = "https://github.com/SteamRE/DepotDownloader/releases/download/DepotDownloader_3.4.0/DepotDownloader-macos-arm64.zip"
+tool_sha256 = "60e80c7c496f3f9a079cd3c62036b35d088c27bc0149baf38f009eb57a52f6a5"
+tool_source = "https://github.com/SteamRE/DepotDownloader/tree/DepotDownloader_3.4.0"
+app = 39500
+# The game in Polish (CP's Strings carry the Polish text and subtitles), whatever was downloaded.
+ini = ["Ini/ge3.ini|Language|Text=Polish", "Ini/ge3.ini|Language|Subtitle.SupportedCount=6",
+       "Ini/ge3.ini|Language|Subtitle.Entry_5=Polish"]
+
+[[launcher.steam.depots]]
+id = 39501
+manifest = "8013367546631285348"
+branch = "cpt_1.75_testbranch"
+files = ["regex:(?i)^(?!redist/|modkit/)", "redist/DirectX/Nov2008_d3dx9_40_x86.cab"]
+mb = 3230
+
+[[launcher.steam.depots]]
+id = 39506
+manifest = "7604240545982573629"
+files = ["Data/Speech_Polish.pak"]
+mb = 930
+label = "Polski dubbing"
+ini_on = ["Ini/ge3.ini|Language|Audio=Polish", "Ini/mountlist.ini||+Data/Speech_Polish=Data/Speech_Polish"]
+ini_off = ["Ini/ge3.ini|Language|Audio=English", "Ini/mountlist.ini||-Data/Speech_Polish=Data/Speech_Polish"]
+
+[setup]
+required_dirs = ["Data", "Ini"]
+
+[bundle]
+exclude = []
+
+# Every module the game runs besides Gothic3Final.exe, mapped at its staged base.
+# The loader maps all of them, then binds imports, so their order is free.
+
+[modules.aux.sharedbase]
+name = "SharedBase.dll"
+path = "stage/SharedBase.dll"
+sha256 = "3087bb4e6c8c7f3bfcf87f79ba889a8c9df223cb71d977963e97dfb51206d4a4"
+from = "SharedBase.dll"
+from_sha256 = "3087bb4e6c8c7f3bfcf87f79ba889a8c9df223cb71d977963e97dfb51206d4a4"
+base = 0x10000000
+size = 0x256000
+listings = "analysis/SharedBase.dll"
+
+[modules.aux.engine]
+name = "Engine.dll"
+path = "stage/Engine.dll"
+sha256 = "278f6f7c820bf9c1b66a81e1dce166d5642a83f56e09af892b3ad6b46871bd1f"
+from = "Engine.dll"
+from_sha256 = "ac0fb50520deb4e9acde483d15f257492fc8158adc0cb7357dc88363a8ece54c"
+base = 0x10260000
+size = 0x6ae000
+listings = "analysis/Engine.dll"
+# CRT terminator from a data table (work/vtable_gaps.py); a float comparator
+# passed to the CRT's qsort (called at 10564e62, run-147)
+entry_points = [0x10582ada, 0x103fd1c0]
+
+[modules.aux.game]
+name = "Game.dll"
+path = "stage/Game.dll"
+sha256 = "4853dcfeb29e545bfd3be9073baa594e2a67efc92a754fe46e4f22ea849f3396"
+from = "Game.dll"
+from_sha256 = "4491a10cdd5908a6f6d9111e0bd5406add7a79901eeeb8d80f769858147a6ca4"
+base = 0x10910000
+size = 0x486000
+listings = "analysis/Game.dll"
+# G3Fixes hook 19: MOV EBX,[EAX+0x14] in gCInventory_PS::CanLearnSkill (native_site_109c656f)
+native_sites = [{at = 0x109c656f, resume = [0x109c6572]}]
+
+[modules.aux.filesystem]
+name = "FileSystem.dll"
+path = "stage/FileSystem.dll"
+sha256 = "c3a16de14caecb8dedbd03c4649e836cf47ef07c63269269d2775e1d3450f381"
+from = "FileSystem.dll"
+from_sha256 = "2aa50477552d760c3c2932e10c7f4adda1cc30c55866876602a1a20b8f1aab61"
+base = 0x10da0000
+size = 0x2d000
+listings = "analysis/FileSystem.dll"
+
+[modules.aux.gfc]
+name = "GFC.dll"
+path = "stage/GFC.dll"
+sha256 = "5b76c9a1374ce546408c3a59bf93ada5076e28734ded509f0c5736cd3bb68e27"
+from = "GFC.dll"
+from_sha256 = "06e114d13ba2cbfb20c7397cf5d0dd18b77eebbbb505e8f2d865f6953efe3cbc"
+base = 0x10dd0000
+size = 0x26000
+listings = "analysis/GFC.dll"
+
+[modules.aux.gui]
+name = "GUI.dll"
+path = "stage/GUI.dll"
+sha256 = "f6820224564bfda672c6aeceb762b8959321877a2765b664098a9fb0c5f9022d"
+from = "GUI.dll"
+from_sha256 = "7e194b5a6af6b8597ab0b417c5c1bd1042cf21541439602fc3ad50bbf8a064e4"
+base = 0x10e00000
+size = 0x75000
+listings = "analysis/GUI.dll"
+# CRT terminator from a data table (work/vtable_gaps.py)
+entry_points = [0x10e3794b]
+
+[modules.aux.importer]
+name = "Importer.dll"
+path = "stage/Importer.dll"
+sha256 = "5561548ef7355cbee85e54f3e0a56201bcf003c892605c534d9f04583cee20a2"
+from = "Importer.dll"
+from_sha256 = "a8696074ba2b0faffd9b70f85ff32eaaf3d679b755386e69e3cccaefe268e606"
+base = 0x10e80000
+size = 0xa7000
+listings = "analysis/Importer.dll"
+
+[modules.aux.script]
+name = "Script.dll"
+path = "stage/Script.dll"
+sha256 = "aeb7b601d9a007c791cdccbf19f57a6406a0a9afcc8b4ab446480af7ca520040"
+from = "Script.dll"
+from_sha256 = "1f7477b13a94b241abdd31f07ce43991539592c6d1492a70a823c89e037623dc"
+base = 0x10f30000
+size = 0x72000
+listings = "analysis/Script.dll"
+# CRT terminator from a data table (work/vtable_gaps.py)
+entry_points = [0x10f5ae6a]
+
+[modules.aux.scriptgame]
+name = "Script_Game.dll"
+path = "stage/scripts/Script_Game.dll"
+sha256 = "b370ee6983396b9af2c2ab83e538e90698cc181a1c42021918cf38199d1e5b48"
+from = "scripts/Script_Game.dll"
+from_sha256 = "cdd9c46120abac49ebb6d53e5bed79512a528e5940238d6d88d150fe9aef3cdc"
+base = 0x10fb0000
+size = 0x139000
+listings = "analysis/Script_Game.dll"
+# G3Fixes hooks inside functions (docs/mods/dll-g3fixes.md, native_site_<at> in native/mods.c):
+# 12 the threat after IsHumanoid failed in FUN_10fd95f0, 13-15 its three CALL AssessTarget,
+# 16-17 the two CALL AssessTarget with reason 7 in ZS_Threaten_Loop
+native_sites = [
+    {at = 0x10fd9ab6, resume = [0x10fd9aea]},
+    {at = 0x10fd990d, resume = [0x10fd9912]},
+    {at = 0x10fd99b8, resume = [0x10fd99bd]},
+    {at = 0x10fd9a35, resume = [0x10fd9a3a]},
+    {at = 0x10fd64fa},
+    {at = 0x10fd6545},
+]
+
+[modules.aux.dialogs]
+name = "Dialogs.dll"
+path = "stage/Dialogs.dll"
+sha256 = "2d8065d41b78fde459e457820d657b68f0cb0b454728ab341f76c26f778c91d1"
+from = "Dialogs.dll"
+from_sha256 = "9a33fb8b9393fbaece093be56ffc6df082cad14b012daca8ba36de384868ceaf"
+base = 0x110f0000
+size = 0x48000
+listings = "analysis/Dialogs.dll"
+# message handlers and a CRT terminator, pointed to from data (work/vtable_gaps.py)
+entry_points = [0x110f87de, 0x110fb92b, 0x110fd203, 0x111161f9]
+
+[modules.aux.physxloader]
+name = "PhysXLoader.dll"
+path = "stage/PhysXLoader.dll"
+sha256 = "f06816d130874945da3f8e8e90be65b864c619cb8ec7c39235694afe3d6ed66a"
+from = "PhysXLoader.dll"
+from_sha256 = "84367e2385589f8cef6b686a4dbe56eab1b8c3cb1b5c6ef40bd5840d3c0b0e47"
+base = 0x11140000
+size = 0xe000
+listings = "analysis/PhysXLoader.dll"
+
+[modules.aux.physxcore]
+name = "PhysXCore.dll"
+path = "stage/PhysXCore.dll"
+sha256 = "9464e94b71593404e9262493245d294b627cf7a4e11db84795559ad4dfafca70"
+from = "PhysXCore.dll"
+from_sha256 = "76aeb1cb08ff3437b95b84c8280db37f4350e17854d7c28fd06f2bc628332186"
+base = 0x11150000
+size = 0x1a0000
+listings = "analysis/PhysXCore.dll"
+# C++ exception filter pointed to from data (work/vtable_gaps.py)
+entry_points = [0x112a5ba9]
+
+[modules.aux.nxcooking]
+name = "NxCooking.dll"
+path = "stage/NxCooking.dll"
+sha256 = "1b1f4c6dd5717fcb2350fadd0efa6f6616549fd89496d1a6176b771e29e88d2c"
+from = "NxCooking.dll"
+from_sha256 = "02692f47e110e0d71e85f689cc7e86f59bc78269eccc112b34c3661db53fd33d"
+base = 0x112f0000
+size = 0x53000
+listings = "analysis/NxCooking.dll"
+
+[modules.aux.fmodex]
+name = "fmodex.dll"
+path = "stage/fmodex.dll"
+sha256 = "127fc334bfeecaf5178627d9284e5739c3a2291c959c66cbd29520670e61ba69"
+from = "fmodex.dll"
+from_sha256 = "df3e611430ef9125bd5645eec62ed37c4bf7093b344e27556f3bccae6f9ceea0"
+base = 0x11350000
+size = 0x14e000
+listings = "analysis/fmodex.dll"
+# functions pointed to from data tables (work/vtable_gaps.py)
+entry_points = [0x11402a60, 0x11404b50]
+
+[modules.aux.d3dx940]
+name = "d3dx9_40.dll"
+path = "stage/d3dx9_40.dll"
+sha256 = "e3b79aebe928713d33768c5040699eeac08ad129be7d77b8f79194593d83a79f"
+from = "redist/DirectX/Nov2008_d3dx9_40_x86.cab"
+from_sha256 = "5f6dc0268e4dded33787348992883751e25cdf68fb7d4e6004ba15bc63a26afb"
+prepare = "cab:d3dx9_40.dll"
+base = 0x114a0000
+size = 0x44a000
+listings = "analysis/d3dx9_40.dll"
+# The linker merged .rdata into .text: from the import table (0x114a1000)
+# through GUIDs, constants and the load config (ends 0x11565610) up to the
+# first function Ghidra lists (0x11565910) it is data. Recovering code there
+# cost most of a 48-minute translation and kept 25 blocks of pointer tables
+# and floats as functions.
+data_in_code = [[0x114a1000, 0x11565910]]
+# The kit serves its msvcrt.dll imports (D-019) except C++ exception dispatch:
+# the copy of __CxxFrameHandler3 linked into the module (11687ba4) hands it to
+# msvcrt's, which is SharedBase's statically linked VC8 CRT handler here
+# (___CxxFrameHandler3, FuncInfo in EAX, magic 0x19930520 forced by the caller).
+import_forwards = { "msvcrt.dll!__CxxFrameHandler" = 0x10084241 }
