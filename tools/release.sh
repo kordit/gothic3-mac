@@ -8,6 +8,11 @@
 # --publish then creates the GitHub release v<version> in game.toml's releases_repo with both files. The
 # launcher finds updates only in a public repository: GitHub answers an anonymous request for a private
 # one with 404.
+#
+# With DEVELOPER_ID="Developer ID Application: Name (TEAMID)" (Apple Developer Program) the app is signed
+# with it under the hardened runtime (tools/entitlements/), and with NOTARY_PROFILE (a profile saved by
+# `xcrun notarytool store-credentials`) the app and the DMG are notarized and stapled, so macOS opens a
+# downloaded copy without asking. Without them the app keeps its ad hoc signature.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 version=${1:-}
@@ -24,11 +29,31 @@ cd "$root"
 shown=$(defaults read "$app/Contents/Info.plist" CFBundleShortVersionString)
 [ "$shown" = "$version" ] || { echo "the app says version $shown, not $version" >&2; exit 1; }
 [ -x "$app/Contents/MacOS/DepotDownloader" ] || { echo "the app carries no DepotDownloader" >&2; exit 1; }
+if [ -n "${DEVELOPER_ID:-}" ]; then
+  # Inside out: the libraries, the helper, then the app.
+  for lib in "$app"/Contents/Frameworks/*.dylib; do
+    [ -f "$lib" ] && codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" "$lib"
+  done
+  codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" \
+    --entitlements "$root/tools/entitlements/depotdownloader.plist" "$app/Contents/MacOS/DepotDownloader"
+  codesign --force --timestamp --options runtime --sign "$DEVELOPER_ID" \
+    --entitlements "$root/tools/entitlements/app.plist" "$app"
+fi
 codesign --verify --deep --strict "$app"
+notarize() { # <file>
+  [ -n "${NOTARY_PROFILE:-}" ] || return 0
+  xcrun notarytool submit "$1" --keychain-profile "$NOTARY_PROFILE" --wait
+}
 
 mkdir -p "$out"
 rm -f "$out/Gothic3Recomp-macOS.zip" "$out/Gothic3-Mac-$version.dmg"
 ditto -c -k --keepParent "$app" "$out/Gothic3Recomp-macOS.zip"
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+  notarize "$out/Gothic3Recomp-macOS.zip"
+  xcrun stapler staple "$app"
+  rm -f "$out/Gothic3Recomp-macOS.zip"
+  ditto -c -k --keepParent "$app" "$out/Gothic3Recomp-macOS.zip"
+fi
 
 dmg_root=$(mktemp -d "$root/work/dmg.XXXXXX")
 trap 'rm -rf "$dmg_root"' EXIT
@@ -37,6 +62,11 @@ ln -s /Applications "$dmg_root/Applications"
 cp "$root/README.md" "$dmg_root/README.md"
 hdiutil create -volname "Gothic 3 Mac $version" -srcfolder "$dmg_root" -ov -format UDZO \
   "$out/Gothic3-Mac-$version.dmg" >/dev/null
+if [ -n "${NOTARY_PROFILE:-}" ]; then
+  [ -n "${DEVELOPER_ID:-}" ] && codesign --force --timestamp --sign "$DEVELOPER_ID" "$out/Gothic3-Mac-$version.dmg"
+  notarize "$out/Gothic3-Mac-$version.dmg"
+  xcrun stapler staple "$out/Gothic3-Mac-$version.dmg"
+fi
 
 (cd "$out" && shasum -a 256 Gothic3Recomp-macOS.zip "Gothic3-Mac-$version.dmg" > SHA256SUMS)
 cat "$out/SHA256SUMS"
