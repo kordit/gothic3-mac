@@ -56,6 +56,14 @@ const Spec &spec_from_config() {
         s.backdrop_seconds = RECOMP_LAUNCHER_BACKDROP_SECONDS;
 #endif
         s.steam = steam_spec_from_config();
+#ifdef RECOMP_LAUNCHER_DEFAULT_MODS
+        {
+            std::istringstream lines(RECOMP_LAUNCHER_DEFAULT_MODS);
+            for (std::string line; std::getline(lines, line);)
+                if (!line.empty())
+                    s.default_mods.push_back(line);
+        }
+#endif
 #ifdef RECOMP_LAUNCHER_PROFILE_SEED
         {
             std::istringstream lines(RECOMP_LAUNCHER_PROFILE_SEED);

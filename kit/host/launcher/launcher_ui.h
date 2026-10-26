@@ -360,6 +360,7 @@ class Launcher {
     ModCatalog mods_;
     ModSelection sel_;
     bool mods_loaded_ = false, have_choice_ = false, confirm_play_ = false;
+    bool default_choice_ = false; // sel_ is [launcher] default_mods, not the player's own
     std::string mod_root_;
     int mod_category_ = 0; // 0 all, 1 enabled, 2+ categories()[i - 2]
     int mod_selected_ = -1;

@@ -42,6 +42,8 @@ struct Spec {
     std::string releases_repo, update_asset;
     // "game file|profile file": copied into the profile after the game is prepared, when missing.
     std::vector<std::string> profile_seed;
+    // Mod ids enabled in a profile that never chose ([launcher] default_mods), where the catalog has them.
+    std::vector<std::string> default_mods;
 };
 const Spec &spec_from_config();
 

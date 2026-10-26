@@ -53,6 +53,15 @@ std::string Launcher::choice_file() const {
 
 void Launcher::load_mods(const std::string &root) {
     mods_ = load_mod_catalog(root);
+    // Defaults the player never chose keep only what this catalog has.
+    if (default_choice_)
+        sel_.ids.erase(std::remove_if(sel_.ids.begin(), sel_.ids.end(),
+                                      [&](const std::string &id) {
+                                          return std::none_of(
+                                              mods_.mods.begin(), mods_.mods.end(),
+                                              [&](const ModInfo &m) { return m.id == id; });
+                                      }),
+                       sel_.ids.end());
     for (ModInfo &m : mods_.mods) {
         if (m.script_dll.empty())
             continue;

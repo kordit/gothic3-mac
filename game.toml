@@ -88,6 +88,12 @@ pad = "mapped"
 [launcher]
 title = "Gothic 3"
 store = "https://store.steampowered.com/app/39500/"
+# The mods enabled for a player who never chose, where their Sefaris catalog has them (the set this port is
+# played and measured with).
+default_mods = ["World Texture Mix", "Better Sound Effects", "Animations Redone - Sword And Shield",
+                "Animations Redone - Staffs and Halberds", "Animations Redone - Two Handed Swords",
+                "Animations Redone - Unarmed Movement", "Animations Redone - Bows and Crossbows", "Achievements",
+                "PL_Text_Fix"]
 # The launcher at every start: mods, updates and uninstall are there.
 always = true
 # The install's compiled shaders into a new player's profile: without them the first start compiles thousands

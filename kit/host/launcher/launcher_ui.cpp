@@ -118,6 +118,11 @@ Launcher::Launcher(const Spec &spec, Platform &platform)
         std::string root;
         have_choice_ = load_mod_choice(choice_file(), &root, &sel_);
         mod_root_ = root.empty() ? default_mod_root(spec_.mod_root) : root;
+        // A profile that never chose starts with the game's default mods ([launcher] default_mods).
+        if (!have_choice_ && !spec_.default_mods.empty()) {
+            sel_.ids = spec_.default_mods;
+            have_choice_ = default_choice_ = true;
+        }
     }
 }
 

@@ -1661,6 +1661,19 @@ void test_mod_screen() {
         l.activate(kPlay);
         CHECK(l.finished() && !exists(active)); // nothing chosen, nothing written
     }
+    {
+        // A profile that never chose starts with the game's defaults, minus what the catalog lacks.
+        Spec d = s;
+        d.default_mods = {"Late", "Not In This Catalog"};
+        Launcher l(d, fp);
+        l.start(root + "/game");
+        l.activate(kMods);
+        CHECK(l.mod_selection().enabled("Late") &&
+              !l.mod_selection().enabled("Not In This Catalog"));
+        CHECK(l.mod_selection().ids.size() == 1);
+        CHECK(!exists(fp.pi.profile_dir +
+                      "/launcher-mods.json")); // still not the player's choice on disk
+    }
     Launcher l(s, fp);
     l.start(root + "/game");
     CHECK(l.status().state == State::Ready && has_button(l, kMods));

@@ -142,6 +142,8 @@ def render_header(cfg):
         for d in steam["depots"]) or "{0u, 0, 0, 0, 0u, 0, 0, 0}"))
     lines.append("#define RECOMP_LAUNCHER_STEAM_INI %s" % c_string("\n".join(steam["ini"])))
     lines.append("#define RECOMP_LAUNCHER_ALWAYS %d" % int(launcher_config.load_always(launcher, cfg["source"])))
+    lines.append("#define RECOMP_LAUNCHER_DEFAULT_MODS %s" % c_string(
+        "\n".join(launcher_config.load_default_mods(launcher, cfg["source"]))))
     lines.append("#define RECOMP_LAUNCHER_PROFILE_SEED %s" % c_string(
         "\n".join(launcher_config.load_profile_seed(launcher, cfg["source"]))))
     # Modules the launcher makes from the player's files: {name, path beside the executable, from,

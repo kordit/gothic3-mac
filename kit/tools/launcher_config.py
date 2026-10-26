@@ -71,6 +71,15 @@ def load_always(launcher, source):
     return always
 
 
+def load_default_mods(launcher, source):
+    """[launcher] default_mods: mod ids (as the mod catalog names them) enabled in a profile whose player
+    never chose; ids the player's catalog lacks are left out."""
+    mods = launcher.get("default_mods", [])
+    if not isinstance(mods, list) or not all(isinstance(m, str) and m and "\n" not in m for m in mods):
+        raise ValueError("%s: [launcher] default_mods must be a list of mod ids" % source)
+    return mods
+
+
 def load_profile_seed(launcher, source):
     """[launcher] profile_seed: "game file|profile file" pairs the launcher copies into the player's
     profile after preparing the game, when the profile has none yet (Gothic 3: the install's
