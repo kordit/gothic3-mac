@@ -88,6 +88,8 @@ pad = "mapped"
 [launcher]
 title = "Gothic 3"
 store = "https://store.steampowered.com/app/39500/"
+# The launcher at every start: mods, updates and uninstall are there.
+always = true
 # The install's compiled shaders into a new player's profile: without them the first start compiles thousands
 # of shaders through d3dx9_40 before the menu (milestone 6.1).
 profile_seed = ["Shader.Cache|Documents/gothic3/Shader.Cache"]

@@ -62,6 +62,15 @@ def check_ini_edits(edits, source):
                              % (source, e))
 
 
+def load_always(launcher, source):
+    """[launcher] always: show the launcher at every start on desktop, not only until the game is found
+    (default false: the kit's games open straight into the game; Shift or Option at start asks for it)."""
+    always = launcher.get("always", False)
+    if type(always) is not bool:
+        raise ValueError("%s: [launcher] always must be true or false" % source)
+    return always
+
+
 def load_profile_seed(launcher, source):
     """[launcher] profile_seed: "game file|profile file" pairs the launcher copies into the player's
     profile after preparing the game, when the profile has none yet (Gothic 3: the install's

@@ -2564,7 +2564,8 @@ int main(int argc, char **argv) {
     {
         const bool mobile = !platform_ui_pointer_capture_supported();
         const bool asked = launcher::requested(argc, argv);
-        if (game.exe.empty() || asked || mobile) {
+        // [launcher] always: the launcher at every start (Gothic 3: mods, updates, uninstall live there).
+        if (game.exe.empty() || asked || mobile || RECOMP_LAUNCHER_ALWAYS) {
             auto platform = launcher::make_platform(g_window);
             launcher::RunOptions options;
             options.known = game.exe;
