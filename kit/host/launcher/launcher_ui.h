@@ -320,6 +320,8 @@ class Launcher {
     void begin_steam();
     // The .ini edits and the modules (spec_.stage) at the import root, then Play.
     void prepare_then_play(const std::vector<std::string> &edits);
+    void mark_started(); // the first Play in this profile: first_start_
+    bool first_start_ = false;
     std::vector<std::string> steam_edits(); // [launcher.steam] ini, and each part's on or off edits
     // Whether `root` is a game this app can start: with modules to make, only its own import.
     bool playable_here(const std::string &root) const;

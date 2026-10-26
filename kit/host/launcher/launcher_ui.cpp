@@ -139,6 +139,17 @@ void Launcher::evaluate(const std::string &root) {
     dirty_ = true;
 }
 
+void Launcher::mark_started() {
+    if (info_.profile_dir.empty())
+        return;
+    const std::string marker = info_.profile_dir + "/launcher-started";
+    OsStat st{};
+    first_start_ = os_stat(marker.c_str(), &st) != 0;
+    if (first_start_)
+        if (FILE *f = fopen(marker.c_str(), "wb"))
+            fclose(f);
+}
+
 bool Launcher::playable_here(const std::string &root) const {
     return spec_.stage.empty() || (root == info_.import_root && modules_staged(root, spec_.stage));
 }
@@ -688,6 +699,7 @@ void Launcher::activate(int id) {
             if (info_.plays_in_place)
                 remember_folder(info_.folders_file, status_.root);
             write_mods_for_play();
+            mark_started();
             finished_ = true;
         }
         break;
@@ -708,6 +720,7 @@ void Launcher::activate(int id) {
         if (status_.state == State::Ready && write_mods_for_play()) {
             if (info_.plays_in_place)
                 remember_folder(info_.folders_file, status_.root);
+            mark_started();
             finished_ = true;
         } else
             rebuild();
@@ -1373,6 +1386,14 @@ void Launcher::draw_starting(Canvas &c, float density) {
     k.display.draw(c, (cw - tw) / 2, y, title, tpx, pal::gold_hot);
     if (!sub.empty())
         k.body.draw(c, (cw - sw) / 2, y + P(34), sub, spx, pal::dim);
+    // The first start prepares what later starts reuse (Gothic 3: its shaders): say so, or it looks hung.
+    if (first_start_) {
+        const std::string note =
+            L("The first start prepares the game and can take a few minutes.",
+              "Pierwsze uruchomienie przygotowuje grę i może potrwać kilka minut.");
+        const int npx = P(16);
+        k.body.draw(c, (cw - k.body.measure(note, npx)) / 2, y + P(64), note, npx, pal::text);
+    }
 }
 
 void Launcher::draw_main(Canvas &c) {
