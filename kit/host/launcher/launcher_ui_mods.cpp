@@ -245,6 +245,8 @@ void Launcher::mods_buttons() {
         else
             add(kModToggle, "Włącz", mod_blocked(mods_, sel_, m.id).empty(), kKindList);
     }
+    if (!spec_.mods_url.empty())
+        add(kModsGet, "Skąd wziąć mody", true, kKindNormal, Icon::Document);
     add(kModsRoot, "Zmień katalog…", info_.can_pick_folder, kKindNormal, Icon::Folder);
     add(kModsBack, "Wróć", true, kKindNormal, Icon::Back);
     add(kModsPlay, confirm_play_ ? "Graj mimo to" : "Graj z modami", status_.state == State::Ready, kKindPrimary,

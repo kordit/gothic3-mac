@@ -1673,6 +1673,13 @@ void test_mod_screen() {
         CHECK(l.mod_selection().ids.size() == 1);
         CHECK(!exists(fp.pi.profile_dir +
                       "/launcher-mods.json")); // still not the player's choice on disk
+        CHECK(!has_button(l, kModsGet)); // no mods_url, no button
+        d.mods_url = "https://example.test/mods";
+        Launcher with_url(d, fp);
+        with_url.start(root + "/game");
+        with_url.activate(kMods);
+        with_url.activate(kModsGet);
+        CHECK(fp.opened_url == "https://example.test/mods");
     }
     Launcher l(s, fp);
     l.start(root + "/game");

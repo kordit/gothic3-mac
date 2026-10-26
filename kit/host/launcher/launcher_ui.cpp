@@ -752,6 +752,9 @@ void Launcher::activate(int id) {
         have_choice_ = true;
         rebuild();
         break;
+    case kModsGet:
+        platform_.open_url(spec_.mods_url);
+        break;
     case kModsRoot: {
         auto weak = std::weak_ptr<Shared>(shared_);
         Launcher *self = this;

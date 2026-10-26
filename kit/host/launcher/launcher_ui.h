@@ -167,6 +167,7 @@ enum Action : int {
     kModToggle,
     kModsSearch,            // the search field
     kModsPresetNone,        // "no preset"
+    kModsGet,               // open [launcher] mods_url: where the mod catalog comes from
     kModsCategory = 6000,   // + 2 + index into categories; kModsCategory: all, +1: enabled
     kModsPresetPick = 7000, // + index into presets
     kModTile = 10000,       // + index into the catalog

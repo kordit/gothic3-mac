@@ -142,6 +142,10 @@ def render_header(cfg):
         for d in steam["depots"]) or "{0u, 0, 0, 0, 0u, 0, 0, 0}"))
     lines.append("#define RECOMP_LAUNCHER_STEAM_INI %s" % c_string("\n".join(steam["ini"])))
     lines.append("#define RECOMP_LAUNCHER_ALWAYS %d" % int(launcher_config.load_always(launcher, cfg["source"])))
+    mods_url = launcher.get("mods_url", "")
+    if not isinstance(mods_url, str) or (mods_url and not mods_url.startswith("https://")):
+        raise ValueError("%s: [launcher] mods_url must be an https:// address" % cfg["source"])
+    lines.append("#define RECOMP_LAUNCHER_MODS_URL %s" % c_string(mods_url))
     lines.append("#define RECOMP_LAUNCHER_DEFAULT_MODS %s" % c_string(
         "\n".join(launcher_config.load_default_mods(launcher, cfg["source"]))))
     lines.append("#define RECOMP_LAUNCHER_PROFILE_SEED %s" % c_string(

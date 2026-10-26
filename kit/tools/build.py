@@ -361,7 +361,7 @@ TRANSLATOR_SOURCES = ("tools/recomp/translate.py", "tools/game_config.py")
 TRANSLATION_MEMORY = 5 << 29
 FINGERPRINT = ".inputs.json"
 #: game.toml keys tools/launcher_config.py reads and no translation does.
-LAUNCHER_ONLY_KEYS = {"launcher": ("steam", "profile_seed", "always", "default_mods"), "aux": ("from", "from_sha256", "prepare")}
+LAUNCHER_ONLY_KEYS = {"launcher": ("steam", "profile_seed", "always", "default_mods", "mods_url"), "aux": ("from", "from_sha256", "prepare")}
 
 
 def translation_jobs(game_dir, build_root, allow_table_gaps=None, aux_modules=(),

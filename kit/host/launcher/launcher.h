@@ -44,6 +44,8 @@ struct Spec {
     std::vector<std::string> profile_seed;
     // Mod ids enabled in a profile that never chose ([launcher] default_mods), where the catalog has them.
     std::vector<std::string> default_mods;
+    // Where a player gets the mod catalog ([launcher] mods_url); "" = no such button.
+    std::string mods_url;
 };
 const Spec &spec_from_config();
 

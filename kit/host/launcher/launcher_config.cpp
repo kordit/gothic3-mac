@@ -56,6 +56,9 @@ const Spec &spec_from_config() {
         s.backdrop_seconds = RECOMP_LAUNCHER_BACKDROP_SECONDS;
 #endif
         s.steam = steam_spec_from_config();
+#ifdef RECOMP_LAUNCHER_MODS_URL
+        s.mods_url = RECOMP_LAUNCHER_MODS_URL;
+#endif
 #ifdef RECOMP_LAUNCHER_DEFAULT_MODS
         {
             std::istringstream lines(RECOMP_LAUNCHER_DEFAULT_MODS);
