@@ -17,12 +17,19 @@ Projekt nie ma nic wspólnego z THQ Nordic, Piranha Bytes, JoWooD ani Valve.
 
 ## Instalacja
 
-1. Pobierz `Gothic3-Mac-<wersja>.dmg` z [wydań](https://github.com/kordit/gothic3-mac/releases).
-2. Otwórz DMG i przeciągnij `Gothic3Recomp` do folderu `Aplikacje`.
-3. Uruchom `Gothic3Recomp` z Aplikacji. Za pierwszym razem macOS go zablokuje, bo aplikacja nie jest
-   notaryzowana przez Apple. Wejdź wtedy w Ustawienia systemowe > Prywatność i ochrona, przewiń w dół i kliknij
-   „Otwórz mimo to”. Potem uruchom jeszcze raz. (Albo w Terminalu:
-   `xattr -dr com.apple.quarantine /Applications/Gothic3Recomp.app`.)
+Otwórz Terminal (Cmd+Spacja, wpisz „Terminal”), wklej to polecenie i naciśnij Enter:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/kordit/gothic3-mac/main/install.sh | sh
+```
+
+Polecenie pobiera najnowszą wersję, sprawdza jej podpis, kładzie ją w Aplikacjach i uruchamia. macOS jej nie
+blokuje. Później otwierasz ją normalnie z Aplikacji albo Launchpada.
+
+Bez Terminala: pobierz `Gothic3-Mac-<wersja>.dmg` z [wydań](https://github.com/kordit/gothic3-mac/releases) i
+przeciągnij `Gothic3Recomp` do Aplikacji. Aplikacja nie jest jeszcze notaryzowana przez Apple, więc za pierwszym
+razem macOS ją zablokuje. Wejdź wtedy w Ustawienia systemowe > Prywatność i ochrona, przewiń w dół, kliknij
+„Otwórz mimo to” i uruchom ją jeszcze raz.
 
 ## Pierwsze uruchomienie
 
@@ -108,9 +115,10 @@ A native Apple Silicon port of Gothic 3 (Community Patch 1.75.14), made by stati
 emulator. It contains no game files and downloads them from your own Steam account, so you need to own Gothic 3
 there. Not affiliated with THQ Nordic, Piranha Bytes, JoWooD or Valve.
 
-1. Open the DMG from [Releases](https://github.com/kordit/gothic3-mac/releases) and drag `Gothic3Recomp` to
-   Applications. The app is not notarized: on the first start allow it in System Settings > Privacy &
-   Security > Open Anyway.
+1. In Terminal: `curl -fsSL https://raw.githubusercontent.com/kordit/gothic3-mac/main/install.sh | sh`
+   (installs to Applications and starts it; macOS does not block it). Or open the DMG from
+   [Releases](https://github.com/kordit/gothic3-mac/releases), drag `Gothic3Recomp` to Applications and, as the
+   app is not notarized yet, allow it in System Settings > Privacy & Security > Open Anyway.
 2. Scan the QR code with the Steam mobile app, or log in with your account name, password and Steam Guard code.
    The password goes to Steam only, through DepotDownloader; the app keeps Steam's login token.
 3. The launcher downloads the game (about 3.3 GB, plus 1 GB of Polish speech you can switch off), prepares it
