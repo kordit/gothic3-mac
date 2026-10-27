@@ -25,6 +25,7 @@ enum {
     G3OPT_ANIM = 1u << 19, /* anim: character animation, pose sampling and blending down the bone hierarchy */
     G3OPT_UV = 1u << 18, /* uv: the particles' vertex update (UpdateVertices) without SharedBase guest calls */
     G3OPT_ZLIB = 1u << 17, /* zlib: FileSystem's inflate (archive reads: textures, world loading, streaming) */
+    G3OPT_LOAD = 1u << 21, /* load: the image cache's loader thread (read at engine start only) */
 };
 
 extern volatile uint32_t g3_opt;

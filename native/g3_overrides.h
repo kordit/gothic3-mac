@@ -311,5 +311,16 @@ void g3n_10a5f180(X86 *c);
 /* phases (phases.c): the render half of a frame, timed for the kit's per-frame phases (logic: mods.c, 10276490) */
 #define FN_10276100 g3n_10276100 /* Engine eCApplication::DoRender */
 void g3n_10276100(X86 *c);
+#define FN_1044fa80 g3n_1044fa80 /* Engine eCBaseCache::CacheInResource, timed as "load" */
+void g3n_1044fa80(X86 *c);
+#define FN_10411d80 g3n_10411d80 /* Engine eCResourceBase_PS::Load, slow call sites logged (stage 4) */
+void g3n_10411d80(X86 *c);
+/* loading.c: the image cache's loader thread (stage 4) */
+#define FN_1026c3e0 g3n_1026c3e0 /* Engine eCApplication::OnInitializeEngine */
+void g3n_1026c3e0(X86 *c);
+#define FN_104a1260 g3n_104a1260 /* Engine: a texture component's bind, lazy with the loader thread */
+void g3n_104a1260(X86 *c);
+#define FN_1044f1d0 g3n_1044f1d0 /* Engine eCBaseCache::eCThreadPoolWorkerItem_Do::DoWork, timed as "bg load" */
+void g3n_1044f1d0(X86 *c);
 
 #endif

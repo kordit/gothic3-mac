@@ -22,7 +22,13 @@
  * stream that ends before its last chunk has every chunk read instead of stopping at that one (the
  * entries are written whole by the packer, so the end of the stream is the end of the entry).
  * Any other entry (stored, encrypted, empty) runs the original. A result of 256 KB or more is also
- * kept in a decompressed-entry cache on disk (below), checked before inflating. */
+ * kept in a decompressed-entry cache on disk (below), checked before inflating.
+ *
+ * Stage 4 (native/loading.c): on a cache's loader thread, an entry of AR_LEND bytes or more is looked up in the
+ * disk cache and inflated without the baton (recomp_host_work_begin), so the game thread runs guest code meanwhile.
+ * That stretch touches only host memory and the destination buffer the guest has just grown for this entry. The
+ * game thread keeps the baton: the inflate is on its own critical path either way, and lending the baton would add
+ * the wait for it to come back. */
 #include "chunk.h"
 #include "g3_opt.h"
 #include "third_party/libdeflate.h"
@@ -35,6 +41,9 @@
 #include <unistd.h>
 
 void fn_10da33c0(X86 *c); /* FileSystem: read a packed archive entry */
+int g3_on_game_thread(void);  /* phases.c */
+_Bool recomp_host_work_begin(void); /* kit/runtime/kernel32.cpp */
+void recomp_host_work_end(void);
 
 /* kit/runtime (C++): guest.h guest_call (pushes the arguments, runs the function, restores ESP). */
 uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) __asm__("__Z10guest_callP3X86jPKji");
@@ -42,6 +51,7 @@ uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) __asm_
 #define AR_APPEND 0x10da2530u   /* destination memory file (ESI): grow by [ESP+4], return the new bytes */
 #define AR_CHUNK 0x20000u       /* the original's input chunk */
 #define AR_FRAME 0x20100u       /* guest stack this function takes below ESP: the chunk and two locals */
+#define AR_LEND (64u << 10)     /* a loader thread inflates this much or more without the baton */
 
 static inline uint8_t *ar_host(uint32_t a) {
     return (uint8_t *)g_mem + a;
@@ -229,6 +239,7 @@ void g3n_10da33c0(X86 *c) {
             break;
     }
     /* The stream's adler32 of the whole result is its last four bytes (big-endian). */
+    const int lent = size >= AR_LEND && !g3_on_game_thread() && recomp_host_work_begin();
     char name[1100];
     int cached = 0;
     if (size >= AR_CACHE_MIN && got == packed && got >= 6u && ar_cache_dir()) {
@@ -237,6 +248,8 @@ void g3n_10da33c0(X86 *c) {
         ar_cache_name(name, sizeof name, (uint32_t)libdeflate_crc32(0, in, got), packed, size, adler);
         cached = 1;
         if (ar_cache_read(name, ar_host(out), size)) {
+            if (lent)
+                recomp_host_work_end();
             wr32(made_out, size);
             al = 1;
             free(in);
@@ -246,12 +259,15 @@ void g3n_10da33c0(X86 *c) {
     if (!ar_dec)
         ar_dec = libdeflate_alloc_decompressor();
     size_t used = 0, made = 0;
-    if (ar_dec && libdeflate_zlib_decompress_ex(ar_dec, in, got, ar_host(out), size, &used, &made) ==
-                      LIBDEFLATE_SUCCESS) {
+    const int ok = ar_dec && libdeflate_zlib_decompress_ex(ar_dec, in, got, ar_host(out), size, &used, &made) ==
+                                 LIBDEFLATE_SUCCESS;
+    if (ok && made == size && cached && used == got)
+        ar_cache_store(name, ar_host(out), size);
+    if (lent)
+        recomp_host_work_end();
+    if (ok) {
         wr32(made_out, (uint32_t)made);
         al = made == size;
-        if (al && cached && used == got)
-            ar_cache_store(name, ar_host(out), size);
     }
     free(in);
 done:
