@@ -25,7 +25,10 @@ app="$root/build/Gothic3Recomp.app"
 out="$root/build/release/$version"
 
 cd "$root"
+# The recorded shaders the app compiles at start-up instead of in a frame (Contents/Resources/shader-warm-seed).
+.venv/bin/python tools/shader_seed.py
 .venv/bin/python tools/build.py --target app --version "$version"
+[ -f "$app/Contents/Resources/shader-warm-seed/order.txt" ] || { echo "the app carries no shader seed" >&2; exit 1; }
 shown=$(defaults read "$app/Contents/Info.plist" CFBundleShortVersionString)
 [ "$shown" = "$version" ] || { echo "the app says version $shown, not $version" >&2; exit 1; }
 [ -x "$app/Contents/MacOS/DepotDownloader" ] || { echo "the app carries no DepotDownloader" >&2; exit 1; }
