@@ -28,6 +28,10 @@ free_threads = "fmodex.dll"
 # Gothic3Final.exe is large address aware: on 64-bit Windows it sees 4 GB of virtual memory and sizes its resource
 # caches by it (D-028).
 virtual_memory_mb = 4096
+# The game thread does not wait on the Metal render thread for the present (one frame queued) nor for occlusion
+# counts the render thread has already published (session 16, fight A/B: 22.0 -> 18.4 ms a frame).
+present_async = 1
+query_nosync = true
 # 4 GB, what the large-address-aware Gothic3Final.exe gets on 64-bit Windows (D-022): with 2 GB a new game ran out
 # of heap while loading the world. The modules end at 0x118ea000 (MSVCRT.DLL, which ended at 0x11930000, is gone:
 # D-020); the rest above them is guest heap (the modules' own CRTs allocate from it).
