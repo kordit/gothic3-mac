@@ -243,6 +243,61 @@ RECOMP_HOT_INLINE void wr64(uint32_t a, uint64_t v) {
     memcpy(g_mem + a, &v, 8);
     recomp_watch(a, 8, v);
 }
+/* LOCK-prefixed read-modify-writes and XCHG with memory (locked on x86 with or without the prefix) as host atomics
+ * with x86's full barrier, so a guest thread running without the baton (free threads) never sees one half done.
+ * Each returns the old value. An unaligned address takes the plain path: ARM64 atomics need natural alignment, and
+ * MSVC places the counters and locks these touch on 4-byte boundaries. */
+RECOMP_HOT_INLINE uint32_t lk_add32(uint32_t a, uint32_t d) {
+    RECOMP_NULL_GUARD(a, 1);
+    uint32_t old;
+    if ((a & 3u) == 0u)
+        old = __atomic_fetch_add((uint32_t *)(g_mem + a), d, __ATOMIC_SEQ_CST);
+    else {
+        memcpy(&old, g_mem + a, 4);
+        const uint32_t v = old + d;
+        memcpy(g_mem + a, &v, 4);
+    }
+    recomp_watch(a, 4, old + d);
+    return old;
+}
+RECOMP_HOT_INLINE uint32_t lk_or32(uint32_t a, uint32_t m) {
+    RECOMP_NULL_GUARD(a, 1);
+    uint32_t old;
+    if ((a & 3u) == 0u)
+        old = __atomic_fetch_or((uint32_t *)(g_mem + a), m, __ATOMIC_SEQ_CST);
+    else {
+        memcpy(&old, g_mem + a, 4);
+        const uint32_t v = old | m;
+        memcpy(g_mem + a, &v, 4);
+    }
+    recomp_watch(a, 4, old | m);
+    return old;
+}
+RECOMP_HOT_INLINE uint32_t lk_and32(uint32_t a, uint32_t m) {
+    RECOMP_NULL_GUARD(a, 1);
+    uint32_t old;
+    if ((a & 3u) == 0u)
+        old = __atomic_fetch_and((uint32_t *)(g_mem + a), m, __ATOMIC_SEQ_CST);
+    else {
+        memcpy(&old, g_mem + a, 4);
+        const uint32_t v = old & m;
+        memcpy(g_mem + a, &v, 4);
+    }
+    recomp_watch(a, 4, old & m);
+    return old;
+}
+RECOMP_HOT_INLINE uint32_t lk_xchg32(uint32_t a, uint32_t v) {
+    RECOMP_NULL_GUARD(a, 1);
+    uint32_t old;
+    if ((a & 3u) == 0u)
+        old = __atomic_exchange_n((uint32_t *)(g_mem + a), v, __ATOMIC_SEQ_CST);
+    else {
+        memcpy(&old, g_mem + a, 4);
+        memcpy(g_mem + a, &v, 4);
+    }
+    recomp_watch(a, 4, v);
+    return old;
+}
 RECOMP_HOT_INLINE float rdf32(uint32_t a) {
     float v;
     memcpy(&v, g_mem + a, 4);

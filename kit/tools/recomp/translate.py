@@ -1660,10 +1660,13 @@ class Image(object):
         if words[0] in self.REP_PREFIX:
             rep = self.REP_PREFIX[words[0]]
             words = words[1:]
+        elif words[0] == "lock" and len(words) > 1:
+            rep = "LOCK"   # the listing grammar's ".LOCK" (Ghidra prints INC.LOCK)
+            words = words[1:]
         mnem = words[-1].upper()
         mnem = self.MNEM_ALIAS.get(mnem, mnem)
         ops = [self._op_text(ci, o, mnem) for o in ci.operands]
-        if rep or mnem in Translator.STRING_MNEM:
+        if (rep and rep != "LOCK") or mnem in Translator.STRING_MNEM:
             ops = []            # implicit ES:EDI / ESI operands carry nothing
         text = "%08x  %s%s%s" % (ci.address, mnem, "." + rep if rep else "",
                                  (" " + ",".join(ops)) if ops else "")
@@ -3650,6 +3653,31 @@ class Translator(object):
             return self.emit_string(ins, m)
         ops = [parse_operand(o) for o in ins.ops] if ins.ops else []
         L = []
+
+        # ------------------------------------------------------- atomics --
+        # XCHG with memory (locked on x86 with or without the prefix) and the LOCK forms the games use (Gothic 3:
+        # SharedBase's 73 LOCK XCHG, 44 DEC, 36 INC, 36 BTR, 8 BTS) as host atomics (x86.h lk_*), so a guest thread
+        # running without the baton never sees one half done. Other LOCK forms and other sizes keep the plain path.
+        if m == "XCHG" and len(ops) == 2 and any(o.kind == "mem" for o in ops) and operand_size(ops) == 32:
+            mem, reg = (ops[0], ops[1]) if ops[0].kind == "mem" else (ops[1], ops[0])
+            L.append("uint32_t t_ = lk_xchg32(%s, %s);" % (addr_expr(mem), read_op(reg, 32)))
+            L.append(write_op(reg, 32, "t_"))
+            return L
+        if ins.rep == "LOCK" and ops and ops[0].kind == "mem":
+            if m in ("INC", "DEC") and operand_size(ops) == 32:
+                L.append("uint32_t a_ = lk_add32(%s, %s), b_ = 1u;"
+                         % (addr_expr(ops[0]), "1u" if m == "INC" else "0xffffffffu"))
+                L.append("uint64_t rf_ = (uint64_t)a_ %s b_;" % ("+" if m == "INC" else "-"))
+                L.append("uint32_t r_ = (uint32_t)rf_;")
+                L += self.flags_arith("add" if m == "INC" else "sub", 32, live - {"cf"})
+                return L
+            if m in ("BTS", "BTR") and operand_size(ops, hint=32) == 32:
+                L.append("uint32_t bi_ = %s;" % read_op(ops[1], 32))
+                L.append("uint32_t ad_ = %s + 4u * (bi_ >> 5);" % addr_expr(ops[0]))
+                L.append("uint32_t v_ = %s;" % ("lk_or32(ad_, 1u << (bi_ & 31u))" if m == "BTS"
+                                                else "lk_and32(ad_, ~(1u << (bi_ & 31u)))"))
+                L.append("c->eflags_cf = (v_ >> (bi_ & 31u)) & 1u;")
+                return L
 
         # ---------------------------------------------------------- data --
         if m == "MOV":

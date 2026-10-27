@@ -15,6 +15,7 @@
 #include <sys/ucontext.h>
 #endif
 #include <map>
+#include <mutex>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -317,6 +318,10 @@ struct Blk {
 
 // Every block in address order, plus an index of just the free ones so that
 // first fit walks free blocks instead of the whole heap.
+// Gothic 3 session 16: the heap is entered from a guest thread running without the baton too (free threads,
+// later the render thread), so every public entry takes this lock. Recursive: alloc, free and realloc call
+// one another.
+std::recursive_mutex g_heap_mutex;
 std::map<uint32_t, Blk> *g_blocks = nullptr;
 std::set<uint32_t> *g_free = nullptr;
 uint64_t g_total_allocs = 0, g_total_frees = 0;
@@ -378,6 +383,7 @@ void readonly_reset(); // the read-only page table, below (cleared with the heap
 bool readonly_release(uint32_t addr); // below: true when `addr` was a read-only page (now writable, untracked)
 
 void heap_reset() {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     guard_reset();
     readonly_reset();
     if (!g_blocks)
@@ -468,11 +474,13 @@ void note_large_free(uint32_t a, uint32_t size) {
 }
 } // namespace
 uint32_t heap_alloc(uint32_t size, bool zero, uint32_t align) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     const uint32_t a = heap_alloc_side(size, zero, align, false);
     note_large_take(a, size);
     return a;
 }
 uint32_t heap_alloc_kit(uint32_t size, bool zero, uint32_t align) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (g_kit_hi) {
         if (uint32_t a = heap_alloc_side(size, zero, align, true))
             return a;
@@ -482,6 +490,7 @@ uint32_t heap_alloc_kit(uint32_t size, bool zero, uint32_t align) {
 }
 namespace {
 uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks)
         return 0;
     if (!size_is_sane(size)) {
@@ -572,6 +581,7 @@ uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
 } // namespace
 
 bool heap_owns(uint32_t addr) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks)
         return false;
     auto it = g_blocks->find(addr);
@@ -579,6 +589,7 @@ bool heap_owns(uint32_t addr) {
 }
 
 uint32_t heap_size(uint32_t addr) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks)
         return 0xffffffffu;
     auto it = g_blocks->find(addr);
@@ -588,6 +599,7 @@ uint32_t heap_size(uint32_t addr) {
 }
 
 bool heap_free(uint32_t addr) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks || !addr)
         return false;
     auto it = g_blocks->find(addr);
@@ -751,6 +763,7 @@ uint32_t heap_alloc_guarded(uint32_t size, bool zero, uint32_t guard, const char
 }
 
 bool heap_free_guarded(uint32_t addr) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!addr)
         return false;
     if (readonly_release(addr)) // a read-only page: opened and taken out of the table first
@@ -794,6 +807,7 @@ uint64_t heap_guard_hits() {
 // Resize a guest heap allocation in place when possible, otherwise copy into a new block.
 // Reject arena-sized overflow requests and leave the original allocation live if growth fails.
 uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!addr)
         return heap_alloc(new_size, zero);
     if (!g_blocks)
@@ -860,6 +874,7 @@ uint32_t heap_realloc(uint32_t addr, uint32_t new_size, bool zero) {
 }
 
 HeapStats heap_stats() {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     HeapStats s{};
     s.total_allocs = g_total_allocs;
     s.total_frees = g_total_frees;
@@ -883,6 +898,7 @@ HeapStats heap_stats() {
 // Check that the heap block map covers the arena without gaps, overlap or adjacent free blocks.
 // Return the first invariant failure, or an empty string when the allocation structure is consistent.
 std::string heap_check() {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks)
         return "heap not initialised";
     uint32_t cursor = HEAP_BASE;
