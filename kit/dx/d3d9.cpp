@@ -228,6 +228,48 @@ static long major_faults() {
     return 0;
 #endif
 }
+// Gothic 3 session 16: where a frame's time goes, beside the frame times. A game's native code reports its own
+// phases (Gothic 3: the logic and the render of eCApplication::OnRun) with recomp_phase_add; the kit adds the
+// game thread's waits on the renderer thread. Each frame-times line is followed by the phases' ms per frame.
+namespace {
+struct Phase {
+    const char *name;
+    uint64_t ns;
+};
+Phase g_phases[8];
+int g_phase_count = 0;
+} // namespace
+extern "C" void recomp_phase_add(const char *name, uint64_t ns) {
+    for (int i = 0; i < g_phase_count; ++i)
+        if (g_phases[i].name == name || !strcmp(g_phases[i].name, name)) {
+            g_phases[i].ns += ns;
+            return;
+        }
+    if (g_phase_count < 8)
+        g_phases[g_phase_count++] = {name, ns};
+}
+static void phases_report(uint64_t frames, double s) {
+    if (!g_phase_count || !frames)
+        return;
+    char line[512];
+    int n = snprintf(line, sizeof line, "d3d9: phases per frame, last %.1f s:", s);
+    for (int i = 0; i < g_phase_count && n < (int)sizeof line; ++i) {
+        n += snprintf(line + n, sizeof line - n, "%s %s %.2f ms", i ? "," : "", g_phases[i].name,
+                      g_phases[i].ns / 1e6 / frames);
+        g_phases[i].ns = 0;
+    }
+    LOGW("%s", line);
+}
+// The time inside a renderer wait, as a phase (frame times on only: the clock reads cost nothing otherwise).
+struct PhaseWait {
+    const char *name;
+    uint64_t t0;
+    explicit PhaseWait(const char *n) : name(n), t0(g_frames_every_s ? os_monotonic_ns() : 0) {}
+    ~PhaseWait() {
+        if (t0)
+            recomp_phase_add(name, os_monotonic_ns() - t0);
+    }
+};
 // The window's average hides a stall: a 10 s window of 20 ms frames can hold a 300 ms one. So each
 // line also has the slowest present-to-present interval, how many were over 33 and 50 ms, and the
 // page faults that waited for I/O in the window (a game pushed to swap stalls on them).
@@ -259,6 +301,8 @@ static void frame_times(uint32_t draws) {
         faults0 = faults_last = faults_now;
         cpu_last = cpu;
         slow_lines = 0;
+        for (int i = 0; i < g_phase_count; ++i)
+            g_phases[i].ns = 0;   // reported while frame times were off
         return;
     }
     ++frames;
@@ -283,6 +327,7 @@ static void frame_times(uint32_t draws) {
          "%llu over 33 ms, %llu over 50 ms, %ld page-ins",
          s, frames / s, 1000.0 * s / frames, (draws - first_draw) / (double)frames, slowest / 1e6,
          (unsigned long long)over33, (unsigned long long)over50, faults - faults0);
+    phases_report(frames, s);
     start = now, frames = 0, first_draw = draws, slowest = over33 = over50 = 0;
     faults0 = faults;
 }
@@ -1139,7 +1184,10 @@ void Dev_Present(X86 *c) {
         host_present(nullptr, (int)bb->width, (int)bb->height, 32, nullptr, (int)bb->pitch);
         if (rprof::on())
             rprof::frame_id_next = host_frame_current().id;   // Remaster P1 (TEST ONLY): row id for the prof CSV
-        host_d9_present(bb->id, bb->width, bb->height);
+        {
+            PhaseWait wait("present wait");
+            host_d9_present(bb->id, bb->width, bb->height);
+        }
         pool_stats_frame();   // Remaster run 10
         ddraw_external_present_end();
         // Test86 HDR: the core mod's pre-HUD scene marker (private render state 250) lasts one frame.
@@ -5011,8 +5059,10 @@ void Query_GetData(X86 *c) {
                 static const bool nosync_env = nosync_text && strtoul(nosync_text, nullptr, 10) != 0;
                 const bool nosync = g_query_nosync < 0 ? nosync_env : g_query_nosync != 0;
                 r = nosync && st.present != g_presents ? host_d9_query_peek(q->id, &count) : -2;
-                if (r == -2)
+                if (r == -2) {
+                    PhaseWait phase("query wait");
                     r = host_d9_query_result(q->id, &count, wait ? 1 : 0);
+                }
             }
             if (r == 0 && (wait || !(flags & 1))) {
                 com_ret(c, S_FALSE9); // not yet
