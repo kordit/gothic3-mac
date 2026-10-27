@@ -1,7 +1,7 @@
 /* native/g3_opt.c - the switches for Gothic 3's native replacements.
  *
  * G3OPT=<groups> in the trace control file (RECOMP_TRACE_CONTROL, read once a second) turns
- * groups on while the game runs: a comma list of rand, particles, occl, d3d, str, mem, audio, vec, scene, leaf, shadow, occlmove, pdo, vfs, cull, ai, move, uv, exec, zlib, anim, load, "all" or "none", and
+ * groups on while the game runs: a comma list of rand, particles, occl, d3d, str, mem, audio, vec, scene, leaf, shadow, occlmove, pdo, vfs, cull, ai, move, uv, exec, zlib, anim, load, rtti, "all" or "none", and
  * "-name" to drop one ("all,-occl"). Without the key the start value stays: RECOMP_G3OPT, else
  * "all". Each group's g3n_ functions run their native code only while its bit is set, so one
  * run can compare a group on and off standing in one place (FRAMES=10 logs the frame time). */
@@ -16,7 +16,7 @@ volatile uint32_t g3_opt = 0xffffffffu;
 static const struct {
     const char *name;
     uint32_t bit;
-} groups[] = {{"rand", G3OPT_RAND}, {"particles", G3OPT_PARTICLES}, {"occl", G3OPT_OCCL}, {"d3d", G3OPT_D3D}, {"str", G3OPT_STR}, {"mem", G3OPT_MEM}, {"audio", G3OPT_AUDIO}, {"vec", G3OPT_VEC}, {"scene", G3OPT_SCENE}, {"leaf", G3OPT_LEAF}, {"shadow", G3OPT_SHADOW}, {"occlmove", G3OPT_OCCLMOVE}, {"pdo", G3OPT_PDO}, {"vfs", G3OPT_VFS}, {"cull", G3OPT_CULL}, {"ai", G3OPT_AI}, {"move", G3OPT_MOVE}, {"anim", G3OPT_ANIM}, {"uv", G3OPT_UV}, {"exec", G3OPT_EXEC}, {"zlib", G3OPT_ZLIB}, {"load", G3OPT_LOAD}};
+} groups[] = {{"rand", G3OPT_RAND}, {"particles", G3OPT_PARTICLES}, {"occl", G3OPT_OCCL}, {"d3d", G3OPT_D3D}, {"str", G3OPT_STR}, {"mem", G3OPT_MEM}, {"audio", G3OPT_AUDIO}, {"vec", G3OPT_VEC}, {"scene", G3OPT_SCENE}, {"leaf", G3OPT_LEAF}, {"shadow", G3OPT_SHADOW}, {"occlmove", G3OPT_OCCLMOVE}, {"pdo", G3OPT_PDO}, {"vfs", G3OPT_VFS}, {"cull", G3OPT_CULL}, {"ai", G3OPT_AI}, {"move", G3OPT_MOVE}, {"anim", G3OPT_ANIM}, {"uv", G3OPT_UV}, {"exec", G3OPT_EXEC}, {"zlib", G3OPT_ZLIB}, {"load", G3OPT_LOAD}, {"rtti", G3OPT_RTTI}};
 
 static uint32_t parse(const char *list, uint32_t value) {
     char word[32];

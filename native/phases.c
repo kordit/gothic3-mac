@@ -19,7 +19,6 @@
 void recomp_phase_add(const char *name, uint64_t ns); /* kit/dx/d3d9.cpp */
 void fn_10276100(X86 *c);                              /* Engine eCApplication::DoRender */
 void fn_1044fa80(X86 *c);                              /* Engine eCBaseCache::CacheInResource */
-void fn_10411d80(X86 *c);                              /* Engine eCResourceBase_PS::Load(behaviour) */
 
 static pthread_t g3_game_thread;
 static _Thread_local int g3_load_depth;
@@ -73,6 +72,11 @@ void g3n_1044fa80(X86 *c) {
     const uint32_t cache = c->r[R_ECX], ent = rd32(c->r[R_ESP] + 4u);
     const uint32_t res = ent ? rd32(ent + 0x48u) : 0u;
     const uint32_t behaviour = res ? rd32(res + 0x18u) : 0u, state = res ? rd32(res + 0x10u) : 0u;
+    if (state == 6u) { /* in already: the call only updates the cache's records, untimed (it is per bind) */
+        fn_1044fa80(c);
+        --g3_load_depth;
+        return;
+    }
     const uint64_t t0 = g3_phase_now();
     fn_1044fa80(c);
     --g3_load_depth;
@@ -86,27 +90,5 @@ void g3n_1044fa80(X86 *c) {
         g3_stack_chain(c->r[R_ESP], chain, sizeof chain);
         fprintf(stderr, "[g3] slow load %.1f ms: cache %08x (vtable %08x), resource vtable %08x, behaviour %u, state %u;"
                         " stack%s\n", ns / 1e6, cache, rd32(cache), res ? rd32(res) : 0u, behaviour, state, chain);
-    }
-}
-
-/* Stage 4 diagnostics: who asks for a resource now (behaviour 1) and waits for it. The guest return address of a slow
- * Load names the call site. */
-void g3n_10411d80(X86 *c) {
-    const uint32_t ret = rd32(c->r[R_ESP]), mode = rd32(c->r[R_ESP] + 4u), res = c->r[R_ECX];
-    const uint32_t vt = rd32(res);
-    if (!g3_on_game_thread()) {
-        fn_10411d80(c);
-        return;
-    }
-    const uint64_t t0 = g3_phase_now();
-    fn_10411d80(c);
-    const uint64_t ns = g3_phase_now() - t0;
-    static int told;
-    if (ns > 30000000u && told < 50) {
-        ++told;
-        char chain[200];
-        g3_stack_chain(c->r[R_ESP] + 8u, chain, sizeof chain);
-        fprintf(stderr, "[g3] slow Load %.1f ms: from %08x, mode %u, resource vtable %08x; stack%s\n", ns / 1e6, ret,
-                mode, vt, chain);
     }
 }

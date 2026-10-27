@@ -313,8 +313,6 @@ void g3n_10a5f180(X86 *c);
 void g3n_10276100(X86 *c);
 #define FN_1044fa80 g3n_1044fa80 /* Engine eCBaseCache::CacheInResource, timed as "load" */
 void g3n_1044fa80(X86 *c);
-#define FN_10411d80 g3n_10411d80 /* Engine eCResourceBase_PS::Load, slow call sites logged (stage 4) */
-void g3n_10411d80(X86 *c);
 /* loading.c: the image cache's loader thread (stage 4) */
 #define FN_1026c3e0 g3n_1026c3e0 /* Engine eCApplication::OnInitializeEngine */
 void g3n_1026c3e0(X86 *c);
@@ -322,5 +320,33 @@ void g3n_1026c3e0(X86 *c);
 void g3n_104a1260(X86 *c);
 #define FN_1044f1d0 g3n_1044f1d0 /* Engine eCBaseCache::eCThreadPoolWorkerItem_Do::DoWork, timed as "bg load" */
 void g3n_1044f1d0(X86 *c);
+
+/* rtti.c: dynamic_cast answers remembered (group rtti) */
+#define FN_10ae9c77 g3n_10ae9c77 /* Game ___RTDynamicCast */
+void g3n_10ae9c77(X86 *c);
+#define FN_004058e9 g3n_004058e9 /* Gothic3Final.exe ___RTDynamicCast */
+void g3n_004058e9(X86 *c);
+#define FN_10e2e179 g3n_10e2e179 /* GUI ___RTDynamicCast */
+void g3n_10e2e179(X86 *c);
+#define FN_1106dd34 g3n_1106dd34 /* Script_Game ___RTDynamicCast */
+void g3n_1106dd34(X86 *c);
+#define FN_105639b8 g3n_105639b8 /* Engine ___RTDynamicCast */
+void g3n_105639b8(X86 *c);
+#define FN_1006f1f7 g3n_1006f1f7 /* SharedBase ___RTDynamicCast */
+void g3n_1006f1f7(X86 *c);
+#define FN_10f4d4c2 g3n_10f4d4c2 /* Script ___RTDynamicCast */
+void g3n_10f4d4c2(X86 *c);
+#define FN_10daff4b g3n_10daff4b /* FileSystem ___RTDynamicCast */
+void g3n_10daff4b(X86 *c);
+#define FN_10ec70a4 g3n_10ec70a4 /* Importer ___RTDynamicCast */
+void g3n_10ec70a4(X86 *c);
+
+/* strings.c: the bCString hash map lookup the quick save leans on (group str) */
+#define FN_10a73590 g3n_10a73590 /* Game FUN_10a73590 */
+void g3n_10a73590(X86 *c);
+
+/* savezip.c: a save's compression with libdeflate (group zlib) */
+#define FN_10ae30f0 g3n_10ae30f0 /* Game zlib deflate, the save writer's only */
+void g3n_10ae30f0(X86 *c);
 
 #endif

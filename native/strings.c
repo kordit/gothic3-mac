@@ -18,11 +18,16 @@
 #include "chunk.h"
 #include "g3_opt.h"
 
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
 void fn_1006c3df(X86 *c); /* SharedBase ___ascii_stricmp */
 void fn_1006c15b(X86 *c); /* SharedBase _tolower */
 void fn_10001ae0(X86 *c); /* SharedBase bCString::CompareFast */
 void fn_10005390(X86 *c); /* SharedBase bCString::operator== (JMP 10001ae0) */
 void fn_10004460(X86 *c); /* SharedBase bCString::FindNoCase */
+void fn_10a73590(X86 *c); /* Game: a bCString hash map's lookup */
 
 #define SB_LOCALE_CHANGED 0x100d40f0u /* SharedBase __locale_changed; _tolower tests it */
 #define SB_EMPTY_STRING 0x1008b4e4u   /* the "" FindNoCase searches when the bCString is empty */
@@ -189,5 +194,68 @@ done:
     c->r[R_EAX] = result;
     c->eip = rd32(sp);
     c->r[R_ESP] = sp + 12u;
+    recomp_return(c);
+}
+
+/* Game FUN_10a73590: a lookup in a hash map keyed by bCString (EAX = the map: +0 the buckets, +4 their count; EBX = the
+ * key; stack: &index out; RET 4; EAX = the node or 0). A node is {bCString key, ?, next}. A quick save spends 13% of
+ * its time in this loop and 15% in the CompareFast it calls per node (work/sample-f5-1.txt, session 16), because
+ * the save's map has long chains. The hash is g_GetHashValue<bCString>'s (SharedBase 10055f40, which Game calls through
+ * [0x10b5df70]), computed here: a guest_call per lookup made the save 60% slower; the walk is here, comparing as CompareFast does: equal when both strings are empty, or when the
+ * lengths (the dword 8 bytes before the chars) match and the chars do up to the NUL. EBX, ESI, EDI and EBP are kept;
+ * ECX and EDX are scratch to the callers (compiled code). A map with no buckets runs the original (its DIV faults). */
+#define GM_HASH_IMPORT 0x10b5df70u /* Game's import of g_GetHashValue<bCString> */
+#define GM_HASH_FN 0x10055f40u     /* where it resolves: SharedBase, computed here instead */
+#define GM_EMPTY 0x1008b4e4u       /* the "" it hashes for a null string */
+
+static inline int sb_equal(uint32_t a, uint32_t b) {
+    if (a == 0u)
+        return b == 0u;
+    if (b == 0u)
+        return 0;
+    const uint32_t n = rd32(a - 8u);
+    if (rd32(b - 8u) != n)
+        return 0;
+    const char *x = (const char *)g_mem + a, *y = (const char *)g_mem + b;
+    return strcmp(x, y) == 0;
+}
+
+void g3n_10a73590(X86 *c) {
+    uint32_t *const r = c->r;
+    const uint32_t map = r[R_EAX];
+    if (!G3OPT(STR) || rd32(map + 4u) == 0u || rd32(GM_HASH_IMPORT) != GM_HASH_FN) {
+        fn_10a73590(c);
+        return;
+    }
+    const uint32_t esp = r[R_ESP], key = r[R_EBX], out = rd32(esp + 4u);
+    /* g_GetHashValue<bCString> (SharedBase 10055f40): h * 33 + each char, signed, "" for a null string. */
+    uint32_t hash = 0u;
+    for (const signed char *p = (const signed char *)g_mem + (rd32(key) ? rd32(key) : GM_EMPTY); *p; ++p)
+        hash = hash * 33u + (uint32_t)(int32_t)*p;
+    const uint32_t count = rd32(map + 4u), at = hash % count;
+    wr32(out, at);
+    uint32_t found = 0u;
+    const uint32_t want = rd32(key);
+    for (uint32_t node = rd32(rd32(map) + at * 4u); node != 0u; node = rd32(node + 8u))
+        if (sb_equal(want, rd32(node))) {
+            found = node;
+            break;
+        }
+    static int check = -1;
+    if (check < 0) {
+        const char *v = getenv("G3_MAP_CHECK");
+        check = v && *v == '1';
+    }
+    if (check) { /* G3_MAP_CHECK=1: the original answers, and a different answer here is logged */
+        fn_10a73590(c);
+        static int told;
+        if (r[R_EAX] != found && told++ < 50)
+            fprintf(stderr, "[g3] str: map %08x key %08x: the original found %08x, the native walk %08x\n", map, key,
+                    r[R_EAX], found);
+        return;
+    }
+    r[R_EAX] = found;
+    c->eip = rd32(esp);
+    r[R_ESP] = esp + 8u;
     recomp_return(c);
 }
