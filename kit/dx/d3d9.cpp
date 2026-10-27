@@ -236,6 +236,7 @@ namespace {
 struct Phase {
     const char *name;
     uint64_t ns;
+    uint64_t frame_ns; // since the last present, for a slow frame's own line
 };
 Phase g_phases[8];
 int g_phase_count = 0;
@@ -244,10 +245,23 @@ extern "C" void recomp_phase_add(const char *name, uint64_t ns) {
     for (int i = 0; i < g_phase_count; ++i)
         if (g_phases[i].name == name || !strcmp(g_phases[i].name, name)) {
             g_phases[i].ns += ns;
+            g_phases[i].frame_ns += ns;
             return;
         }
     if (g_phase_count < 8)
-        g_phases[g_phase_count++] = {name, ns};
+        g_phases[g_phase_count++] = {name, ns, ns};
+}
+// A slow frame's phases, as " (name X ms, ...)", and every phase's frame share cleared for the next one. A phase
+// ends where its code returns, so "render" here is mostly the frame before (its present is this interval's start).
+static void phases_frame(char *out, size_t cap, bool want) {
+    int n = 0;
+    out[0] = 0;
+    for (int i = 0; i < g_phase_count; ++i) {
+        if (want && n < (int)cap)
+            n += snprintf(out + n, cap - n, "%s%s %.1f ms", n ? ", " : "; ", g_phases[i].name,
+                          g_phases[i].frame_ns / 1e6);
+        g_phases[i].frame_ns = 0;
+    }
 }
 static void phases_report(uint64_t frames, double s) {
     if (!g_phase_count || !frames)
@@ -276,7 +290,7 @@ struct PhaseWait {
 // page faults that waited for I/O in the window (a game pushed to swap stalls on them).
 // Session 12: a single frame over 100 ms gets a line of its own with the game thread's CPU time and the
 // page-ins inside it. CPU close to the frame time: the game computed; far below it: it waited (swap, a
-// lock, the presenter). At most 20 such lines per window.
+// lock, the presenter). At most 20 such lines per window. Session 16: over 50 ms, with the frame's phases.
 static void frame_times(uint32_t draws) {
     static uint64_t start = 0, frames = 0, first_draw = 0, last = 0, slowest = 0, over33 = 0, over50 = 0;
     static uint64_t cpu_last = 0;
@@ -303,16 +317,20 @@ static void frame_times(uint32_t draws) {
         cpu_last = cpu;
         slow_lines = 0;
         for (int i = 0; i < g_phase_count; ++i)
-            g_phases[i].ns = 0;   // reported while frame times were off
+            g_phases[i].ns = g_phases[i].frame_ns = 0;   // reported while frame times were off
         return;
     }
     ++frames;
     const uint64_t dt = now - last;
     last = now;
-    if (dt > 100000000u && slow_lines < 20) {
+    const bool slow = dt > 50000000u && slow_lines < 20;
+    char phases[256];
+    phases_frame(phases, sizeof phases, slow);
+    if (slow) {
         ++slow_lines;
-        LOGW("d3d9: slow frame %.1f ms: game thread CPU %.1f ms, %ld page-ins, %u draws", dt / 1e6,
-             cpu >= cpu_last ? (cpu - cpu_last) / 1e6 : -1.0, faults_now - faults_last, draws - g_frame_base);
+        LOGW("d3d9: slow frame %.1f ms: game thread CPU %.1f ms, %ld page-ins, %u draws%s", dt / 1e6,
+             cpu >= cpu_last ? (cpu - cpu_last) / 1e6 : -1.0, faults_now - faults_last, draws - g_frame_base,
+             phases);
     }
     cpu_last = cpu;
     faults_last = faults_now;

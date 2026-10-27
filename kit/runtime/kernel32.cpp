@@ -855,6 +855,10 @@ void k_CreateFileA(X86 *c) {
     create_file_named(c, gm_str(arg(c, 0)));
 }
 
+extern "C" bool recomp_host_work_begin();
+extern "C" void recomp_host_work_end();
+extern "C" bool recomp_cur_is_main_thread();
+
 void k_ReadFile(X86 *c) {
     HObj *o = handle_get(arg(c, 0), H_FILE);
     uint32_t buf = arg(c, 1), want = arg(c, 2), pread = arg(c, 3);
@@ -874,7 +878,15 @@ void k_ReadFile(X86 *c) {
         set_eax(c, 0);
         return;
     }
-    int64_t n = os_fd_read(o->fd, g_mem + buf, want);
+    // A big read on a guest thread other than the main one (Gothic 3: the image cache's loader) goes without the
+    // baton: the descriptor and the destination are this call's, and a cold read stalls nobody else. Only a big one:
+    // taking the baton back waits for the holder's next checkpoint, up to a millisecond, and FileSystem reads an
+    // archive in 128 KB pieces (64 KB and up here made each texture 10 times slower to come in).
+    const int fd = o->fd;
+    const bool lend = want >= (1u << 20) && !recomp_cur_is_main_thread() && recomp_host_work_begin();
+    int64_t n = os_fd_read(fd, g_mem + buf, want);
+    if (lend)
+        recomp_host_work_end();
     if (recomp_env("TRACE_FILES"))
         LOGW("file: read handle=%08x want=%u got=%lld", arg(c, 0), want, (long long)n);
     if (n < 0) {
@@ -6056,6 +6068,39 @@ void sched_free_release() {
         sched_handoff_on_exit_locked(me->index, "free thread runs on");
     g_sched_m.unlock();
     recomp_t_free = true;
+}
+
+// A batoned guest thread's stretch of host-only work: no guest code, no shim, and only guest memory no other thread
+// touches. The baton goes to the other guest threads meanwhile, as a free thread lets it go, and comes back through
+// sched_free_acquire. Gothic 3 (native/archive.c): an archive entry inflated on a cache's loader thread while the
+// game thread runs. On a free thread it does nothing: that thread has no baton to lend.
+extern "C" bool recomp_host_work_begin() {
+    if (recomp_t_free || !sched_is_guest_thread() || threads().size() < 2)
+        return false;
+    GuestThread *me = cur_thread();
+    g_sched_m.lock();
+    if (me->free_run) { // a free thread inside a shim it took the baton for: it lends nothing of its own
+        g_sched_m.unlock();
+        return false;
+    }
+    me->free_run = true;
+    g_sched_m.unlock();
+    sched_free_release();
+    return true;
+}
+
+extern "C" void recomp_host_work_end() {
+    sched_free_acquire();
+    GuestThread *me = cur_thread();
+    g_sched_m.lock();
+    me->free_run = false;
+    me->free_wants = false;
+    g_sched_m.unlock();
+}
+
+// True on the process's main guest thread, and on a thread that is no guest thread at all.
+extern "C" bool recomp_cur_is_main_thread() {
+    return !sched_is_guest_thread() || cur_thread()->is_main;
 }
 
 void sched_free_enter_critsec(uint32_t cs) {
