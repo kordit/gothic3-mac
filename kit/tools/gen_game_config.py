@@ -54,6 +54,8 @@ def render_header(cfg):
     lines.append("#define RECOMP_PHYSICAL_MEMORY_MB %du" % game["physical_memory_mb"])
     lines.append("#define RECOMP_FREE_THREADS_DEFAULT %s" % json.dumps(game.get("free_threads", "")))
     lines.append("#define RECOMP_VIRTUAL_MEMORY_MB %du" % game.get("virtual_memory_mb", 2047))
+    lines.append("#define RECOMP_D3D9_PRESENT_ASYNC_DEFAULT %d" % game.get("present_async", 0))
+    lines.append("#define RECOMP_D3D9_QUERY_NOSYNC_DEFAULT %d" % int(game.get("query_nosync", False)))
     if game.get("frame_cap"):
         lines.append("#define RECOMP_GAME_FRAME_CAP_ADDR %s" % c_hex(game["frame_cap"]))
     # The display adapter D3D9 names (GetAdapterIdentifier); games pick their detail by its ids ([game] adapter).

@@ -7,7 +7,8 @@
 // runs here. The draw's variable data is copied into the batch, because the
 // device state it points at changes as soon as the call returns.
 // RECOMP_D3D9_THREAD=0 encodes on the game thread instead.
-// Two switches take the game thread off that wait (both off by default; see
+// Two switches take the game thread off that wait (off unless game.toml [game] present_async and
+// query_nosync turn them on; see
 // present_ahead and host_d9_query_peek): RECOMP_D3D9_PRESENT_ASYNC=<n> runs the
 // present itself on the render thread, up to n frames behind the game, and the
 // render thread publishes finished occlusion counts for dx/d3d9.cpp's
@@ -21,6 +22,7 @@
 
 #include "../../dx/d3d9_shader.h"
 #include "../../platform/os.h"
+#include "game_config.h"
 #include "../../platform/ab_phase.h"
 #include "../../platform/rprof.h"
 #include "../d3d_render.h"
@@ -184,7 +186,10 @@ std::atomic<int> g_present_ahead_live{-1}; // -1: the environment's
 int present_ahead() {
     static const int env = [] {
         const char *e = recomp_env("D3D9_PRESENT_ASYNC");
-        return e ? atoi(e) : 0;
+#ifndef RECOMP_D3D9_PRESENT_ASYNC_DEFAULT
+#define RECOMP_D3D9_PRESENT_ASYNC_DEFAULT 0   // game_config.h from before game.toml [game] present_async
+#endif
+        return e ? atoi(e) : RECOMP_D3D9_PRESENT_ASYNC_DEFAULT;
     }();
     const int live = g_present_ahead_live.load(std::memory_order_relaxed);
     const int n = live >= 0 ? live : env;

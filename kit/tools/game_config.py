@@ -241,6 +241,16 @@ def load(game_dir):
     virt = game.setdefault("virtual_memory_mb", 2047)
     if not isinstance(virt, int) or isinstance(virt, bool) or not 64 <= virt <= 4096:
         raise ValueError("%s: [game] virtual_memory_mb must be an integer 64-4096" % source)
+    # [game] present_async and query_nosync: the game thread's two waits on the D3D9 render thread taken off by
+    # default (kit/host/gpu/d3d9_host.cpp header): present up to N frames behind the game (0-3, default 0), and
+    # occlusion counts read without a sync when the render thread has published them. The environment
+    # (RECOMP_D3D9_PRESENT_ASYNC, RECOMP_D3D9_QUERY_NOSYNC) still wins. Gothic 3 session 16: 22.0 -> 18.4 ms a frame
+    # in a fight.
+    ahead = game.setdefault("present_async", 0)
+    if not isinstance(ahead, int) or isinstance(ahead, bool) or not 0 <= ahead <= 3:
+        raise ValueError("%s: [game] present_async must be an integer 0-3" % source)
+    if not isinstance(game.setdefault("query_nosync", False), bool):
+        raise ValueError("%s: [game] query_nosync must be true or false" % source)
     data_dir_name(game.setdefault("data_dir_name", game["app_name"]))
     # NFSU1 run 8: the guest address of the game's own frame-time cap (a float, seconds per frame, e.g. 1/60). The kit
     # writes 1/limit there when the Frame limit setting is 40/60/120 so the game itself runs at that rate; 0 = none.

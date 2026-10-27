@@ -20,6 +20,7 @@
 #include "../runtime/guest.h"
 #include "../runtime/memory.h"
 #include "../runtime/display_seam.h"
+#include "game_config.h"
 #include "../runtime/win32.h"
 #include "../platform/os.h"
 #include "../platform/ab_phase.h"
@@ -5056,7 +5057,11 @@ void Query_GetData(X86 *c) {
                 r = 0;
             else {
                 static const char *nosync_text = recomp_env("D3D9_QUERY_NOSYNC");
-                static const bool nosync_env = nosync_text && strtoul(nosync_text, nullptr, 10) != 0;
+#ifndef RECOMP_D3D9_QUERY_NOSYNC_DEFAULT
+#define RECOMP_D3D9_QUERY_NOSYNC_DEFAULT 0   // game_config.h from before game.toml [game] query_nosync
+#endif
+                static const bool nosync_env = nosync_text ? strtoul(nosync_text, nullptr, 10) != 0
+                                                           : RECOMP_D3D9_QUERY_NOSYNC_DEFAULT != 0;
                 const bool nosync = g_query_nosync < 0 ? nosync_env : g_query_nosync != 0;
                 r = nosync && st.present != g_presents ? host_d9_query_peek(q->id, &count) : -2;
                 if (r == -2) {
