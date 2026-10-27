@@ -117,6 +117,12 @@ def main():
         (resources / "launcher").mkdir(exist_ok=True)
         for picture in sorted(art.glob("*.jpg")):
             shutil.copy2(picture, resources / "launcher" / picture.name)
+    # Recorded Metal shaders and pipelines the game compiles in the background at start-up instead of in a
+    # frame (d3d9_metal.mm ShaderWarm), when this build has a seed: <build>/shader-warm-seed.
+    seed = args.build_root / "shader-warm-seed"
+    if (seed / "order.txt").is_file():
+        shutil.rmtree(resources / "shader-warm-seed", ignore_errors=True)
+        shutil.copytree(seed, resources / "shader-warm-seed")
     # The game's shipped on-screen control layouts, when it has any (spec section 5).
     copy_layouts.copy_layouts(args.game_dir, resources / "controls")
     # The translation index the mod loader reads, when this build has one.

@@ -1330,6 +1330,17 @@ class Renderer final : public D9Backend {
             warm = profile_warm.c_str();
         } else if (warm && !strcmp(warm, "0"))
             warm = nullptr;
+        // Gothic 3 session 16: a new player compiled every light and effect variant in the draw (a torch held
+        // frames 100-440 ms per library). Unset, the seed is the application's Resources/shader-warm-seed when it
+        // ships one (tools/recomp/finish_bundle.py); "0" turns it off.
+        static std::string bundled_seed;
+        if (!seed) {
+            bundled_seed = host_resource("shader-warm-seed");
+            struct stat st;
+            if (!bundled_seed.empty() && stat((bundled_seed + "/order.txt").c_str(), &st) == 0)
+                seed = bundled_seed.c_str();
+        } else if (!strcmp(seed, "0"))
+            seed = nullptr;
         if ((warm && *warm) || (seed && *seed)) {
             // Namespace of the recorded keys. The compile options themselves are always the current
             // run's (the background and draw paths share ShaderWarm::options()).

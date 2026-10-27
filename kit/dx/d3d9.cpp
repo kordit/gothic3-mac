@@ -240,6 +240,14 @@ static void frame_times(uint32_t draws) {
     static long faults0 = 0, faults_last = 0;
     static int slow_lines = 0;
     const uint64_t now = os_monotonic_ns();
+    // RECOMP_D3D9_FRAMES=<s>: the same lines without a trace control file (a player's app logging to its profile).
+    static const bool from_env = [] {
+        const char *e = recomp_env("D3D9_FRAMES");
+        if (e && !g_frames_every_s)
+            g_frames_every_s = (uint32_t)strtoul(e, nullptr, 10);
+        return true;
+    }();
+    (void)from_env;
     if (!g_frames_every_s) {
         start = 0;
         return;

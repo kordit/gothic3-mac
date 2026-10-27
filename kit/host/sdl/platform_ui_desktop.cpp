@@ -3,6 +3,7 @@
 #include "platform_ui.h"
 
 #include "../game_path.h"
+#include "../../runtime/layout.h"
 
 #ifdef __ANDROID__
 #include "../audio.h"
@@ -218,7 +219,8 @@ int platform_ui_default_overlay() {
 #ifdef __ANDROID__
     return 0;
 #else
-    return 2;
+    // Gothic 3 0.1.0: a player's app started with the graph over the game.
+    return host_layout().developer ? 2 : 0;
 #endif
 }
 

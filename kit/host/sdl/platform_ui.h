@@ -46,7 +46,8 @@ bool platform_ui_touch_device();
 bool platform_ui_pointer_capture_supported();
 
 // The performance overlay mode a fresh profile starts with: 2 (graph) on the
-// developer's desktop, 0 on a player's tablet.
+// developer's desktop (a checkout above the executable), 0 in a player's app
+// and on a player's tablet.
 int platform_ui_default_overlay();
 
 // The guest has exited and the host has torn down: a desktop process returns

@@ -80,6 +80,11 @@ extern "C" void recomp_trace_calls_image(void (*const *base)(X86 *), RecompHookF
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -2402,6 +2407,34 @@ int web_main(int argc, char **argv) {
 } // namespace
 #endif
 
+// Gothic 3 session 16: a player's app started from Finder wrote its log nowhere, so a stutter the player
+// reported had no frame times behind it. Without a terminal and outside a checkout, stdout and stderr go
+// to <profile>/logs/game.log (the run before: game-prev.log), with the frame times every 10 s unless
+// RECOMP_D3D9_FRAMES says otherwise. RECOMP_LOG_FILE=0 keeps them where they were.
+[[maybe_unused]] static void log_to_profile() {
+#if !defined(_WIN32) && !defined(__ANDROID__)
+    const char *off = recomp_env("LOG_FILE");
+    if ((off && !strcmp(off, "0")) || isatty(2) || host_layout().developer || host_layout().profile_dir.empty())
+        return;
+    const std::string dir = host_layout().profile_dir + "/logs";
+    mkdir(host_layout().profile_dir.c_str(), 0700);
+    mkdir(dir.c_str(), 0700);
+    rename((dir + "/game.log").c_str(), (dir + "/game-prev.log").c_str());
+    const int fd = open((dir + "/game.log").c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0)
+        return;
+    fflush(stdout);
+    fflush(stderr);
+    dup2(fd, 1);
+    dup2(fd, 2);
+    close(fd);
+    setvbuf(stdout, nullptr, _IOLBF, 0);
+    if (!recomp_env("D3D9_FRAMES"))
+        os_setenv("RECOMP_D3D9_FRAMES", "10");
+    printf(RECOMP_APP_NAME " %s\n", POP_RECOMP_VERSION);
+#endif
+}
+
 int main(int argc, char **argv) {
 #ifdef __EMSCRIPTEN__
     return web_main(argc, argv);
@@ -2474,6 +2507,7 @@ int main(int argc, char **argv) {
             SDL_Log("[android] game data: %s", game.exe.c_str());
     }
 #else
+    log_to_profile();
     GamePath game = platform_ui_resolve_game(exe_flag, &game_error);
 #endif
     if (!game_error.empty()) {
