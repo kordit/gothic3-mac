@@ -32,6 +32,7 @@ static uint32_t g_free_lo[FREE_MODULES_MAX], g_free_end[FREE_MODULES_MAX];
 static int g_free_count = 0;
 static uint32_t g_free_hi = 0;
 #include <map>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -54,8 +55,11 @@ std::map<uint32_t, SetjmpRecord *> &setjmps() {
     static std::map<uint32_t, SetjmpRecord *> m;
     return m;
 }
+// Gothic 3 session 16: guest threads may run at once (free threads), so the records are taken under a lock and
+// the context and value read after a longjmp belong to the thread that jumped.
+std::mutex g_setjmp_mutex;
 // Read after a longjmp, so it must not be a local of the returning frame.
-X86 *g_setjmp_ctx = nullptr;
+thread_local X86 *g_setjmp_ctx = nullptr;
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -1059,9 +1063,14 @@ void recomp_int(X86 *c, uint32_t vec) {
 // ---------------------------------------------------------------------------
 jmp_buf *recomp_setjmp_prepare(X86 *c) {
     uint32_t buf = rd32(c->r[R_ESP] + 4); // cdecl argument 0
-    SetjmpRecord *&rec = setjmps()[buf];
-    if (!rec)
-        rec = new SetjmpRecord();
+    SetjmpRecord *rec;
+    {
+        std::lock_guard<std::mutex> lock(g_setjmp_mutex);
+        SetjmpRecord *&slot = setjmps()[buf];
+        if (!slot)
+            slot = new SetjmpRecord();
+        rec = slot;
+    }
     rec->buf = buf;
     rec->saved = *c;
     rec->profile_depth = recomp_profile_depth();
@@ -1095,7 +1104,7 @@ void recomp_setjmp(X86 *c) {
     abort();
 }
 
-static int g_longjmp_value = 1;
+static thread_local int g_longjmp_value = 1;
 int recomp_longjmp_value(void) {
     return g_longjmp_value;
 }
@@ -1103,14 +1112,19 @@ int recomp_longjmp_value(void) {
 void recomp_longjmp(X86 *c) {
     uint32_t buf = rd32(c->r[R_ESP] + 4);
     int value = (int)rd32(c->r[R_ESP] + 8);
-    auto it = setjmps().find(buf);
-    if (it == setjmps().end() || !it->second->armed) {
+    SetjmpRecord *rec = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_setjmp_mutex);
+        auto it = setjmps().find(buf);
+        if (it != setjmps().end() && it->second->armed)
+            rec = it->second;
+    }
+    if (!rec) {
         LOGW("_longjmp(%08x, %d): no matching _setjmp, cannot unwind", buf, value);
         abort();
     }
     if (value == 0)
         value = 1; // longjmp(buf, 0) makes setjmp return 1
-    SetjmpRecord *rec = it->second;
     // A guest longjmp jumps over every host frame between here and the
     // setjmp, including any mod hook invocation sitting on them. Tell the mod
     // layer so those invocations are abandoned rather than left to run their

@@ -741,7 +741,11 @@ FreeKind free_kind_of(const char *desc) {
         "KERNEL32.dll!InterlockedDecrement",    "KERNEL32.dll!InterlockedExchange",
         "KERNEL32.dll!InterlockedCompareExchange", "KERNEL32.dll!GetLastError",
         "KERNEL32.dll!SetLastError",            "KERNEL32.dll!EncodePointer",
-        "KERNEL32.dll!DecodePointer",           "WINMM.dll!timeGetTime"};
+        "KERNEL32.dll!DecodePointer",           "WINMM.dll!timeGetTime",
+        // The heap has its own lock (memory.cpp g_heap_mutex, session 16).
+        "KERNEL32.dll!HeapAlloc",               "KERNEL32.dll!HeapFree",
+        "KERNEL32.dll!HeapReAlloc",             "KERNEL32.dll!HeapSize",
+        "KERNEL32.dll!GetProcessHeap"};
     if (!desc)
         return FREE_BATON;
     for (const char *d : direct)
