@@ -59,7 +59,7 @@ inline_call_cache = true
 # trace.ctl, native/g3_opt.c). The header goes to every module; the sources build into the exe's
 # library. Changing the header recompiles every module, the sources alone do not.
 overrides = "native/g3_overrides.h"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c", "native/phases.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
 
 [hooks]
 # Sentinels.

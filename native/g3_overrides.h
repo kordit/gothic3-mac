@@ -308,4 +308,8 @@ void g3n_10276490(X86 *c);
 #define FN_10a5f180 g3n_10a5f180 /* Game gCPlayerMemory_PS::CalcMissingValue (20) */
 void g3n_10a5f180(X86 *c);
 
+/* phases (phases.c): the render half of a frame, timed for the kit's per-frame phases (logic: mods.c, 10276490) */
+#define FN_10276100 g3n_10276100 /* Engine eCApplication::DoRender */
+void g3n_10276100(X86 *c);
+
 #endif
