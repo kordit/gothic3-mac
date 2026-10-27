@@ -2707,6 +2707,7 @@ class Renderer final : public D9Backend {
         const bool atm_now = atm_pending_;
         atm_pending_ = false;
         d9trace::Draw *tr = trace_draw(d);
+        fb_prepare(d);
         if (!ensure_pass(d.target)) {
             if (tr)
                 tr->result = d9trace::Result::NoPass;
@@ -3625,12 +3626,13 @@ class Renderer final : public D9Backend {
                     tr->feedback_textures |= 1u << s;
                 tex = nil;
             }
-            // A texture that is also this pass's target cannot be read from.
+            // A texture that is also this pass's target cannot be read from: its copy from fb_prepare instead.
             for (int i = 0; i < 4 && tex; ++i)
                 if (tex == pass_color_[i]) {
                     if (tr)
                         tr->feedback_textures |= 1u << s;
-                    tex = nil;
+                    tex = fb_shadow_for(d.target.color[i].id);
+                    break;
                 }
             if (tex)
                 t->used = serial_;
@@ -3690,6 +3692,8 @@ class Renderer final : public D9Backend {
             [enc_ popDebugGroup];
         if (tr)
             tr->result = encoded;
+        if (encoded == d9trace::Result::Encoded)
+            fb_after_draw(d, pp, cw);
         if (trace_ && encoded == d9trace::Result::Encoded) {
             for (int i = 0; i < 4; ++i)
                 if (pass_color_[i] && cw[i])
@@ -4557,6 +4561,7 @@ class Renderer final : public D9Backend {
             rtex_.frame();
         rcache_.present();
         soft_done_ = false; // Remaster S3 trial: one capture per frame at most
+        fb_frame_end();
         if (smoke_draws_ && ++smoke_frames_ % 600 == 0)   // run 14 lit smoke: once per 600 frames while in use
             fprintf(stderr, "[remaster] lit smoke: frame %llu lit draws %llu (tyre %llu flare %llu steam stack %llu soot %llu "
                             "fog %llu steam %llu green %llu) no camera %llu fallbacks %llu\n",
@@ -7215,6 +7220,111 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     bool same_target(const HostD9Target &t) const {
         return enc_ && memcmp(&t, &pass_target_, sizeof t) == 0;
     }
+    // Gothic 3 (torch flames, spell fire): the scene pass keeps its depth target (G32R32F) bound as colour 1 while
+    // the soft particle shaders, and others not identified yet (ps 1dc6e65d07e1c82a, b6697ffc447e0b43), sample it. Direct3D 9 reads what the frame
+    // drew into it so far; a Metal pass cannot sample its own attachment, and the bind gave a placeholder (the
+    // particles' depth fade came out near 0, the flames invisible). A target this draw samples is copied first: the
+    // open pass ends (storing it), the copy is made, and the draw samples the copy. The copy serves every later
+    // draw that samples it until a draw that does not sample it writes it, a clear, or the frame's end.
+    struct FbShadow {
+        id<MTLTexture> tex = nil;
+        bool valid = false;
+    };
+    std::unordered_map<uint32_t, FbShadow> fb_shadow_;
+    uint32_t fb_valid_ = 0, fb_sampled_ = 0;   // shadows in use; this draw's sampled colour targets (bits)
+    uint64_t fb_copies_ = 0;
+    void fb_invalidate(uint32_t tid) {
+        auto it = fb_shadow_.find(tid);
+        if (it != fb_shadow_.end() && it->second.valid) {
+            it->second.valid = false;
+            --fb_valid_;
+        }
+    }
+    void fb_frame_end() {
+        for (auto &kv : fb_shadow_)
+            kv.second.valid = false;
+        fb_valid_ = 0;
+    }
+    id<MTLTexture> fb_shadow_for(uint32_t tid) const {
+        auto it = fb_shadow_.find(tid);
+        return it != fb_shadow_.end() && it->second.valid ? it->second.tex : nil;
+    }
+    void fb_prepare(const HostD9Draw &d) {
+        fb_sampled_ = 0;
+        id<MTLTexture> targets[4] = {};
+        bool any_target = false;
+        for (int i = 0; i < 4; ++i)
+            if (Tex *ct = d.target.color[i].id ? tex_ptr(d.target.color[i].id) : nullptr) {
+                targets[i] = ct->texture;
+                any_target |= targets[i] != nil;
+            }
+        if (!any_target)
+            return;
+        uint32_t hits = 0;   // the stages that bind one of the targets
+        for (uint32_t s = 0; s < 16; ++s) {
+            Tex *st = d.sampler_texture[s] ? tex_ptr(d.sampler_texture[s]) : nullptr;
+            if (!st || !st->texture)
+                continue;
+            for (int i = 0; i < 4; ++i)
+                if (targets[i] == st->texture)
+                    hits |= 1u << s;
+        }
+        if (!hits || (!d.ps_key && !d.ps))
+            return;
+        const uint64_t key = d.ps_key ? d.ps_key : d9sh::code_key(d.ps, d.ps_size);
+        const d9sh::Program &p = d9sh::program_for_key(key, d.ps, d.ps_size);
+        if (!p.ok)
+            return;
+        const uint32_t used = (p.sampler_mask >= 0 ? (uint32_t)p.sampler_mask : d9msl::pixel_sampler_mask(p)) & hits;
+        for (int i = 0; i < 4; ++i) {
+            const uint32_t tid = d.target.color[i].id;
+            bool sampled = false;
+            for (uint32_t s = 0; s < 16 && !sampled; ++s)
+                sampled = targets[i] && (used >> s & 1) && tex_ptr(d.sampler_texture[s])->texture == targets[i];
+            if (!sampled)
+                continue;
+            fb_sampled_ |= 1u << i;
+            FbShadow &sh = fb_shadow_[tid];
+            if (sh.valid)
+                continue;
+            Tex *ct = tex_ptr(tid);
+            id<MTLTexture> src = ct ? ct->texture : nil;
+            if (!src || ct->depth || src.textureType != MTLTextureType2D || src.mipmapLevelCount != 1)
+                continue;
+            if (!sh.tex || sh.tex.width != src.width || sh.tex.height != src.height ||
+                sh.tex.pixelFormat != src.pixelFormat) {
+                MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:src.pixelFormat
+                                                                                              width:src.width
+                                                                                             height:src.height
+                                                                                          mipmapped:NO];
+                td.storageMode = MTLStorageModePrivate;
+                td.usage = MTLTextureUsageShaderRead;
+                sh.tex = [mtl_ newTextureWithDescriptor:td];
+                if (!sh.tex)
+                    continue;
+            }
+            end_pass();   // the target's contents so far reach the texture
+            begin_frame();
+            id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
+            [blit copyFromTexture:src toTexture:sh.tex];
+            [blit endEncoding];
+            sh.valid = true;
+            ++fb_valid_;
+            if (++fb_copies_ == 1)
+                fprintf(stderr, "d3d9 metal: a draw samples its own colour target %d (texture %u, %lux%lu); it reads a "
+                                "copy made at that point, as Direct3D 9 reads what the frame drew (ps %016llx)\n",
+                        i, tid, (unsigned long)src.width, (unsigned long)src.height, (unsigned long long)key);
+        }
+    }
+    // After a draw is encoded: a target it wrote without sampling it no longer matches its copy.
+    void fb_after_draw(const HostD9Draw &d, const d9sh::Program &pp, const uint32_t cw[4]) {
+        if (!fb_valid_)
+            return;
+        const uint32_t outs = d9msl::pixel_color_outputs(pp);
+        for (int i = 0; i < 4; ++i)
+            if (pass_color_[i] && cw[i] && (outs >> i & 1) && !(fb_sampled_ >> i & 1))
+                fb_invalidate(d.target.color[i].id);
+    }
     bool ensure_pass(const HostD9Target &t) {
         if (same_target(t))
             return true;
@@ -7253,6 +7363,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
                 rp.colorAttachments[i].storeAction = MTLStoreActionStore;
             }
             if (clear_color) {   // Direct3D 9 clears every bound target, not only the first
+                fb_invalidate(t.color[i].id);
                 rp.colorAttachments[i].loadAction = MTLLoadActionClear;
                 rp.colorAttachments[i].clearColor =
                     MTLClearColorMake(rgba[0], rgba[1], rgba[2], rgba[3]);
