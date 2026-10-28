@@ -23,9 +23,6 @@ qpc_us = true
 # GlobalMemoryStatusEx's RAM: below 1436 MB eCApplication::GetOptimalCacheSizes (Engine 10274a80) takes
 # its smallest resource caches and the world's meshes are evicted as they load (D-024).
 physical_memory_mb = 2048
-# the host's cores: the engine starts its own PVS prefetcher thread only with more than one (Engine 10406de0,
-# docs/perf/ladowanie-natywne.md)
-processors = 0
 # FMOD Ex's mixer, output and stream threads run without the baton (D-026, 25.10.2026: combat 37.7 -> 34.9 ms).
 free_threads = "fmodex.dll"
 # Gothic3Final.exe is large address aware: on 64-bit Windows it sees 4 GB of virtual memory and sizes its resource
