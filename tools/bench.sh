@@ -23,7 +23,7 @@ printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$script"
 profile=$(.venv/bin/python -c "import os, sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode', os.environ.get('BENCH_PROFILE') or None))")
 # BENCH_MODS=1: the player's mods (build/recomp/profile/active-mods.json: World Texture Mix, Animations
 # Redone, ...) linked into the bench profile as the launcher does; otherwise the profile runs unmodded.
-if [ "${BENCH_MODS:-0}" = 1 ]; then cp build/recomp/profile/active-mods.json "$profile/active-mods.json"; else rm -f "$profile/active-mods.json"; fi
+if [ "${BENCH_MODS:-0}" = 1 ]; then cp "${BENCH_MODS_FILE:-build/recomp/profile/active-mods.json}" "$profile/active-mods.json"; else rm -f "$profile/active-mods.json"; fi
 .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.build_mod_view('$profile')" >&2
 # The new game's intro (G3_Intro.bik, 5354 frames, about 214 s) skipped as tools/run.py does for newgame;
 # without it a scripted new game sat at 1 draw per frame for the whole run.

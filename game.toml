@@ -32,6 +32,9 @@ virtual_memory_mb = 4096
 # counts the render thread has already published (session 16, fight A/B: 22.0 -> 18.4 ms a frame).
 present_async = 1
 query_nosync = true
+# Render targets at the game's own size, not grown to the Retina drawable (session 16 part 2: the player's 3456x2168
+# window made them 1.75x each way, the cave GPU-bound at 13.3 ms a frame against 8.5 ms at 1x).
+render_scale_max = 1.0
 # 4 GB, what the large-address-aware Gothic3Final.exe gets on 64-bit Windows (D-022): with 2 GB a new game ran out
 # of heap while loading the world. The modules end at 0x118ea000 (MSVCRT.DLL, which ended at 0x11930000, is gone:
 # D-020); the rest above them is guest heap (the modules' own CRTs allocate from it).

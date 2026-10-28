@@ -91,6 +91,19 @@ def prepare_profile(mode, profile=None):
         if (name == "UserOptions.ini" or not copy.exists()) and mine.exists():
             copy.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(mine, copy)
+    # G3_USEROPT_SET="Resolution.Width=1280,ShadowQuality=2": UserOptions.ini keys for this run only (GPU A/B,
+    # work/gpu-probe.sh). Only keys the player's file already has.
+    opts = profile / "Documents/gothic3/UserOptions.ini"
+    pairs = [p.split("=", 1) for p in filter(None, os.environ.get("G3_USEROPT_SET", "").split(","))]
+    if pairs and opts.exists():
+        text = opts.read_bytes().decode("latin-1")
+        newline = "\r\n" if "\r\n" in text else "\n"
+        lines = text.split(newline)
+        for key, value in pairs:
+            for i, line in enumerate(lines):
+                if line.split("=", 1)[0].strip() == key.strip():
+                    lines[i] = "%s=%s" % (key.strip(), value.strip())
+        opts.write_bytes(newline.join(lines).encode("latin-1"))
     return profile
 
 
