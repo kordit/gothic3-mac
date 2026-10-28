@@ -35,7 +35,11 @@ extern "C" bool recomp_cur_is_main_thread();
 namespace {
 
 const char *const FS_DLL = "FileSystem.dll";
-constexpr uint32_t BIG = 1u << 20; // a read this big off the main thread lends the baton, as k_ReadFile does
+// An archive read or inflate this big off the main thread lends the baton. The image cache's loader thread held it
+// 44-66 ms a texture while the game thread waited (player's game 28.10, 23 slow frames in wait yield), and textures
+// are mostly under 1 MB, k_ReadFile's bound. Taking the baton back can cost the loader up to a frame, so the smallest
+// entries (an inflate of about 0.1 ms) keep it.
+constexpr uint32_t LEND = 64u << 10;
 
 thread_local X86 *t_c; // the guest context of the call in progress on this thread
 
@@ -358,7 +362,7 @@ void s_read(X86 *c) { // (buf, n)
         ret(c, 0);
         return;
     }
-    std::lock_guard<std::mutex> g(f->pos_m);
+    std::unique_lock<std::mutex> g(f->pos_m);
     if (f->kind == File::BUFFERED) { // 10da6d90 on the memory stream: up to its end
         std::lock_guard<std::mutex> m(f->mem->m);
         const uint64_t size = f->mem->bytes.size();
@@ -373,12 +377,23 @@ void s_read(X86 *c) { // (buf, n)
         ret(c, 0);
         return;
     }
-    const bool lend = n >= BIG && !recomp_cur_is_main_thread() && recomp_host_work_begin();
-    const int64_t got = g3fs::pack_pread(*f->pack, f->node->offset + f->pos, g_mem + buf, n);
-    if (lend)
+    // A lending read lets the position go first: taking the baton back waits for whoever holds it, and that thread may
+    // be waiting for this file.
+    const uint64_t at = f->pos;
+    bool lend = false;
+    if (n >= LEND && !recomp_cur_is_main_thread()) {
+        g.unlock();
+        lend = recomp_host_work_begin();
+        if (!lend)
+            g.lock();
+    }
+    const int64_t got = g3fs::pack_pread(*f->pack, f->node->offset + at, g_mem + buf, n);
+    if (lend) {
         recomp_host_work_end();
+        g.lock();
+    }
     const uint32_t k = got > 0 ? (uint32_t)got : 0u;
-    f->pos += k;
+    f->pos = at + k;
     ret(c, k);
 }
 void s_write(X86 *c) { // (buf, n)
@@ -704,7 +719,7 @@ void m_create_file(X86 *c) {
             if (!mem) {
                 auto fresh = std::make_shared<Shared>();
                 const bool lend =
-                    hit.node->size >= BIG && !recomp_cur_is_main_thread() && recomp_host_work_begin();
+                    hit.node->size >= LEND && !recomp_cur_is_main_thread() && recomp_host_work_begin();
                 const bool ok = g3fs::pack_read_entry(*hit.pack, *hit.node, &fresh->bytes);
                 if (lend)
                     recomp_host_work_end();
