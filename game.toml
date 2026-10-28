@@ -193,6 +193,12 @@ listings = "analysis/Engine.dll"
 # CRT terminator from a data table (work/vtable_gaps.py); a float comparator
 # passed to the CRT's qsort (called at 10564e62, run-147)
 entry_points = [0x10582ada, 0x103fd1c0]
+# The image cache's budget (D-045, again by the user's decision of 29.10, D-050): GetOptimalCacheSizes (10274a80,
+# the only reader) gives images this times 1.951 (the 32-bit address space it caps at 0xf9c00000), 655.6 MB from
+# 336e6, freeing above 0.85 of it (557 MB) while one walk of the player's save needs about 1.34 GB of images
+# (docs/perf/ladowanie-natywne.md, session 24). The pixels are not in guest memory and since 3f56663 a sampled
+# texture has one copy on the host, so 1e9: 1.95 GB, freeing above 1.66 GB, below 2^31 on its own.
+data = [{at = 0x106e86a0, f64 = 1e9, was = 336e6}]
 
 [modules.aux.game]
 name = "Game.dll"
