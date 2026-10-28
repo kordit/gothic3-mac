@@ -171,7 +171,10 @@ struct Tex {
     // stay the guest's (GetDesc still says 21/22); readbacks convert (hdr_read).
     id<MTLTexture> sdr_texture = nil, sdr_msaa = nil;
     bool promoted = false;
+    // The newest blit upload (upload, kBlitUploadBytes), which a CPU read of the texture waits for.
+    id<MTLCommandBuffer> upload_cmd = nil;
 };
+const size_t kBlitUploadBytes = 256 * 1024;
 // A buffer replaced while a frame still read it, kept for reuse once that
 // frame is done. [lo, hi) is what has been written since it was replaced.
 struct SpareBuf {
@@ -1659,6 +1662,33 @@ class Renderer final : public D9Backend {
                        bytesPerImage:0];
             return;
         }
+        // A large level the GPU swizzles itself (Gothic 3 session 22: replaceRegion's swizzle of a 21 MB World Texture
+        // Mix texture ran on the CPU while the game thread waited). The bytes go into a buffer and a blit in a command
+        // buffer of its own, committed now, so it runs before the frame being encoded (one queue, commit order); settle
+        // above already waited for any draw of the old contents. A read of the texture waits for the blit.
+        const uint32_t rows = t.info.block ? (h + 3) / 4 : h;
+        if ((t.info.block || t.info.conv == Conv::Direct) && (size_t)pitch * rows >= kBlitUploadBytes) {
+            auto staging = [mtl_ newBufferWithBytes:bytes
+                                                      length:(NSUInteger)pitch * rows
+                                                     options:MTLResourceStorageModeShared];
+            auto ub = staging ? [queue_ commandBuffer] : nil; // `id` is the texture's parameter here
+            auto blit = [ub blitCommandEncoder];
+            if (blit) {
+                [blit copyFromBuffer:staging
+                           sourceOffset:0
+                      sourceBytesPerRow:pitch
+                    sourceBytesPerImage:(NSUInteger)pitch * rows
+                             sourceSize:MTLSizeMake(w, h, 1)
+                              toTexture:t.texture
+                       destinationSlice:face
+                       destinationLevel:level
+                      destinationOrigin:MTLOriginMake(0, 0, 0)];
+                [blit endEncoding];
+                [ub commit];
+                t.upload_cmd = ub;
+                return;
+            }
+        }
         if (t.info.block) {
             [t.texture replaceRegion:region
                          mipmapLevel:level
@@ -1708,6 +1738,10 @@ class Renderer final : public D9Backend {
         if (t.texture.storageMode == MTLStorageModePrivate || (t.info.block && t.info.conv != Conv::Direct))
             return false;
         settle(t.used);
+        if (t.upload_cmd) {
+            [t.upload_cmd waitUntilCompleted];
+            t.upload_cmd = nil;
+        }
         if (t.promoted)   // PLAN_R2 item 10: the float back buffer read as the guest's 8-bit bytes
             return hdr_read(t, level, face, bytes, pitch);
         uint32_t pw = std::max<uint32_t>((uint32_t)t.texture.width >> level, 1);
