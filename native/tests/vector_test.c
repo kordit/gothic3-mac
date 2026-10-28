@@ -1,7 +1,7 @@
 /* native/tests/vector_test.c - native SharedBase vector/matrix/cull leaves against the translation.
  *
  * Build and run (from the checkout root):
- *   NATIVE="vector.c rand.c ai.c" sh native/tests/build.sh vector aux-sharedbase/chunk_10010000.c \
+ *   NATIVE="vector.c rand.c" sh native/tests/build.sh vector aux-sharedbase/chunk_10010000.c \
  *     aux-sharedbase/chunk_10014000.c aux-sharedbase/chunk_10018000.c aux-sharedbase/chunk_10034000.c \
  *     aux-sharedbase/chunk_10038000.c aux-sharedbase/chunk_10040000.c aux-sharedbase/chunk_1000c000.c \
  *     aux-sharedbase/chunk_10084000.c aux-sharedbase/chunk_10074000.c aux-sharedbase/chunk_10070000.c \

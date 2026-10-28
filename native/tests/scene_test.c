@@ -1,7 +1,7 @@
 /* native/tests/scene_test.c - native/scene.c against the translation.
  *
  * Build and run (from the checkout root):
- *   NATIVE="scene.c cull.c" sh native/tests/build.sh scene aux-engine/chunk_103fc000.c aux-engine/chunk_10494000.c
+ *   NATIVE=scene.c sh native/tests/build.sh scene aux-engine/chunk_103fc000.c aux-engine/chunk_10494000.c
  * (cull.c because the override header sends ExtractFromEntity's CullVPTHC, UpdateNodeData and
  * CalculateLoDArea calls to its g3n_; the test keeps the cull group off, so they reach the fakes)
  * (the first chunk holds the translated ExtractFromEntity 103ff970 and FilterEntityCullCallback
@@ -434,7 +434,7 @@ static void test_off(unsigned n) {
         dt_save(1);
         dt_restore();
         c = start;
-        g3_opt = ~(G3OPT_SCENE | G3OPT_CULL);
+        g3_opt = ~G3OPT_SCENE;
         g3n_103ff970(&c);
         dt_compare("ExtractFromEntity (scene off)", &o, &c);
     }
@@ -473,7 +473,7 @@ static void bench(void) {
     double t[3];
     bench_fast = 1;
     for (int k = 0; k < 3; ++k) {
-        g3_opt = k ? ~G3OPT_CULL : 0u;
+        g3_opt = k ? ~0u : 0u;
         const double t0 = now_ns();
         for (unsigned rep = 0; rep < REP; ++rep)
             for (unsigned i = 0; i < NC; ++i) {
@@ -497,8 +497,6 @@ static void bench(void) {
 int main(void) {
     harness_mem();
     dt_load_pe("Engine.dll");
-    /* the callees below are fakes; the cull group would run its natives in their place */
-    dt_native_opt = ~G3OPT_CULL;
     dt_stack_floor = ESP0 - 0x800u;
     dt_region(dt_stack_floor, 0x900u);
     dt_region(DB, 0x300u);

@@ -33,7 +33,8 @@ cc() {
 objs=""
 for ch in "$@"; do
     o="$out/$(echo "$ch" | tr '/' '_').o"
-    if [ ! -f "$o" ] || [ "$gen/$ch" -nt "$o" ]; then
+    # the chunk names g3n_ through the override header, so a changed header rebuilds it too
+    if [ ! -f "$o" ] || [ "$gen/$ch" -nt "$o" ] || [ "$wt/native/g3_overrides.h" -nt "$o" ]; then
         cc -w -c "$gen/$ch" -o "$o"
     fi
     objs="$objs $o"

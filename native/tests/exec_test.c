@@ -1,8 +1,9 @@
 /* native/tests/exec_test.c - native/exec.c against the translation.
  *
  * Build and run (from the checkout root):
- *   NATIVE="exec.c shadow.c vector.c pdo.c" sh native/tests/build.sh exec aux-engine/chunk_10564000.c \
- *       aux-engine/chunk_103ac000.c aux-sharedbase/chunk_10010000.c aux-sharedbase/chunk_10018000.c
+ *   NATIVE="exec.c shadow.c vector.c pdo.c scene.c" sh native/tests/build.sh exec aux-engine/chunk_10564000.c \
+ *       aux-engine/chunk_103ac000.c aux-sharedbase/chunk_10010000.c aux-sharedbase/chunk_10018000.c \
+ *       aux-engine/chunk_10494000.c
  * G3N_BENCH=1 adds a timing of a particle sort.
  *
  * The particle depth sort as DepthSortParticles 103afa70 makes it: Engine's qsort over particles

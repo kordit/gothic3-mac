@@ -10,12 +10,9 @@
 #include <string.h>
 
 void fn_103ff970(X86 *c); /* Engine eCFrustumDatabase::ExtractFromEntity */
-void fn_103fee70(X86 *c); /* Engine eCFrustumDatabase::ExtractFromFrustum */
 void fn_1040c9d0(X86 *c); /* Engine eCFrustumFilter::CullFrustum (leaf) */
-void fn_10450020(X86 *c); /* Engine eCBaseCache::Process */
 void fn_10494fc0(X86 *c); /* Engine FUN_10494fc0 (leaf, __fastcall, under eCEntityAdmin::Process) */
 void fn_104956f0(X86 *c); /* Engine FUN_104956f0 (under eCEntityAdmin::Process) */
-void fn_1055b5b0(X86 *c); /* Engine FUN_1055b5b0 (thiscall) */
 
 /* ---- ExtractFromEntity's callees, guest functions called from here ----------------------- */
 
@@ -278,10 +275,6 @@ out:
     recomp_return(c);
 }
 
-void g3n_103fee70(X86 *c) {
-    fn_103fee70(c);
-}
-
 /* Helpers for CullFrustum (prefixed so they stay apart from the rest of this file). */
 static inline double cf_ld(uint32_t a) {
     return (double)rdf32(a);
@@ -387,10 +380,6 @@ void g3n_1040c9d0(X86 *c) {
     c->eip = rd32(esp0);
     c->r[4] = esp0 + 8u;
     recomp_return(c);
-}
-
-void g3n_10450020(X86 *c) {
-    fn_10450020(c);
 }
 
 /* FUN_10494fc0 is no leaf. It resets the shader constant ranges at ESI+0x20, makes one virtual
@@ -549,8 +538,4 @@ out:
     c->eip = rd32(r[4]);
     r[4] += 12u;
     recomp_return(c);
-}
-
-void g3n_1055b5b0(X86 *c) {
-    fn_1055b5b0(c);
 }

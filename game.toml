@@ -23,6 +23,9 @@ qpc_us = true
 # GlobalMemoryStatusEx's RAM: below 1436 MB eCApplication::GetOptimalCacheSizes (Engine 10274a80) takes
 # its smallest resource caches and the world's meshes are evicted as they load (D-024).
 physical_memory_mb = 2048
+# the host's cores: the engine starts its own PVS prefetcher thread only with more than one (Engine 10406de0,
+# docs/perf/ladowanie-natywne.md)
+processors = 0
 # FMOD Ex's mixer, output and stream threads run without the baton (D-026, 25.10.2026: combat 37.7 -> 34.9 ms).
 free_threads = "fmodex.dll"
 # Gothic3Final.exe is large address aware: on 64-bit Windows it sees 4 GB of virtual memory and sizes its resource
@@ -66,7 +69,7 @@ inline_call_cache = true
 # trace.ctl, native/g3_opt.c). The header goes to every module; the sources build into the exe's
 # library. Changing the header recompiles every module, the sources alone do not.
 overrides = "native/g3_overrides.h"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c", "native/lod.c", "native/navfix.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/savezip.c", "native/navfix.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
 
 [hooks]
 # Sentinels.
@@ -189,9 +192,6 @@ listings = "analysis/Engine.dll"
 # CRT terminator from a data table (work/vtable_gaps.py); a float comparator
 # passed to the CRT's qsort (called at 10564e62, run-147)
 entry_points = [0x10582ada, 0x103fd1c0]
-# lod (native/lod.c): CreateLoD's walk for a vertex by key (FUN_10548ad0), answered through a hash; on at the walk's
-# match or after it
-native_sites = [{at = 0x10548c3a, resume = [0x10548c53, 0x10548cb7]}]
 
 [modules.aux.game]
 name = "Game.dll"
