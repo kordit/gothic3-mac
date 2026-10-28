@@ -21,15 +21,27 @@ printf '%b' "${BENCH_STEPS:-}" > "$script"
 printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$script"
 # BENCH_PROFILE=<dir>: a profile of its own (two benches at once, an A/B under the same load), prepared as <mode>'s.
 profile=$(.venv/bin/python -c "import os, sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode', os.environ.get('BENCH_PROFILE') or None))")
-# BENCH_MODS=1: the player's mods (build/recomp/profile/active-mods.json: World Texture Mix, Animations
-# Redone, ...) linked into the bench profile as the launcher does; otherwise the profile runs unmodded.
-if [ "${BENCH_MODS:-0}" = 1 ]; then cp "${BENCH_MODS_FILE:-build/recomp/profile/active-mods.json}" "$profile/active-mods.json"; else rm -f "$profile/active-mods.json"; fi
+# The player's own setup by default (user, 28.10.2026: measurements on other data than the player's never matched
+# the game; the bench said 70 fps in a fight where the player had 20). Copies, never the player's files:
+# - mods: the player's active-mods.json (BENCH_MODS_FILE another list, BENCH_MODS=0 unmodded);
+# - host settings: the player's mod-settings.json (BENCH_PLAYER_SETTINGS=0 keeps the profile's own);
+# - drawable: the player's screen, 3456x2170 (BENCH_DRAWABLE another size).
+# ge3.ini, UserOptions.ini and Shader.Cache come from the player's profile already (tools/run.py prepare_profile).
+player="$HOME/Library/Application Support/Gothic 3 Native"
+if [ "${BENCH_MODS:-1}" = 1 ]; then
+  cp "${BENCH_MODS_FILE:-$player/active-mods.json}" "$profile/active-mods.json"
+else
+  rm -f "$profile/active-mods.json"
+fi
+if [ "${BENCH_PLAYER_SETTINGS:-1}" = 1 ] && [ -f "$player/mod-settings.json" ]; then
+  cp "$player/mod-settings.json" "$profile/mod-settings.json"
+fi
 .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.build_mod_view('$profile')" >&2
 # The new game's intro (G3_Intro.bik, 5354 frames, about 214 s) skipped as tools/run.py does for newgame;
 # without it a scripted new game sat at 1 draw per frame for the whole run.
 RECOMP_BINK_SKIP="${RECOMP_BINK_SKIP-G3_Intro}" \
 RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
-  RECOMP_TRACE_CONTROL="$ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE="${BENCH_DRAWABLE:-1920x1200}" \
+  RECOMP_TRACE_CONTROL="$ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE="${BENCH_DRAWABLE:-3456x2170}" \
   nohup "${BENCH_BIN:-build/recomp/pop_smoke}" --script "$script" > "work/bench-$label.log" 2>&1 &
 pid=$!
 echo "$pid" > "work/bench-$label.pid"
