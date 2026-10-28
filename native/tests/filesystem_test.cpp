@@ -7,6 +7,7 @@
 // walks every mounted folder the way AddDirToCache does (FindFirstFileA "<folder>/*.*" and down every directory) and
 // prints one line per file: the virtual path, the size, the attributes and where an open gets it from (an archive's
 // file name, or "disk"). tools/g3pak.py index computes the same lines on its own from the archives' trees.
+// read <archive>...: every entry read and inflated, its length checked.
 // scratch <dir>: create, write-time, delete and attribute calls on a temporary folder, checked against the contract.
 #include "../filesystem_core.h"
 
@@ -247,9 +248,40 @@ int scratch(const std::string &dir) {
     return failures ? 1 : 0;
 }
 
+// Every entry of the archives read as an open reads it (stored copied, zlib inflated), its length checked.
+int read_all(int n, char **paths) {
+    unsigned long long entries = 0, bytes = 0, bad = 0;
+    for (int i = 0; i < n; ++i) {
+        g3fs::Pack pack;
+        pack.path = pack.host_path = paths[i];
+        std::string error;
+        if (!g3fs::pack_load(&pack, &error)) {
+            printf("FAIL %s: %s\n", paths[i], error.c_str());
+            ++bad;
+            continue;
+        }
+        std::vector<uint8_t> data;
+        for (const g3fs::Node &node : pack.nodes) {
+            if (node.folder)
+                continue;
+            ++entries;
+            if (!g3fs::pack_read_entry(pack, node, &data) || data.size() != node.size) {
+                if (bad < 20)
+                    printf("FAIL %s: %s\n", paths[i], node.path.c_str());
+                ++bad;
+            }
+            bytes += data.size();
+        }
+    }
+    printf("read: %llu entries, %llu MB, %llu failures\n", entries, bytes >> 20, bad);
+    return bad ? 1 : 0;
+}
+
 } // namespace
 
 int main(int argc, char **argv) {
+    if (argc >= 3 && !strcmp(argv[1], "read"))
+        return read_all(argc - 2, argv + 2);
     if (argc == 4 && !strcmp(argv[1], "index"))
         return run_index(argv[2], argv[3][0] == '1');
     if (argc == 3 && !strcmp(argv[1], "scratch"))

@@ -63,6 +63,7 @@ struct Node {
 struct Pack {
     std::string path, host_path; // the guest path MountPackFile got, the host file
     int fd = -1;
+    uint64_t file_size = 0; // of the archive file, the bound every offset and length is checked against
     std::deque<Node> nodes; // nodes[0] is the root
     Node *root() { return &nodes.front(); }
     ~Pack();

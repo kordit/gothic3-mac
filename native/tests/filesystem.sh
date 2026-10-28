@@ -25,6 +25,9 @@ for ext in 0 1; do
         status=1
     fi
 done
+find "$game/Data" -maxdepth 1 \( -iname '*.pak' -o -iname '*.p0?' -o -iname '*.cpt' -o -iname '*.c0?' \
+    -o -iname '*.mod' -o -iname '*.m0?' -o -iname '*.nod' -o -iname '*.n0?' \) -print0 |
+    xargs -0 "$out/filesystem_test" read || status=1
 scratch=$(mktemp -d "$out/scratch.XXXXXX")
 rmdir "$scratch"
 "$out/filesystem_test" scratch "$scratch" || status=1

@@ -8,6 +8,7 @@ extern "C" int g3fs_name_fits(const char *pattern, const char *name); // filesys
 
 #include <cstring>
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 namespace g3fs {
@@ -360,6 +361,12 @@ bool pack_load(Pack *pack, std::string *error) { // 10da5830, 10da5a10, 10da5cd0
         *error = "cannot open";
         return false;
     }
+    struct stat st;
+    if (fstat(pack->fd, &st) != 0) {
+        *error = "cannot stat";
+        return false;
+    }
+    pack->file_size = (uint64_t)st.st_size;
     uint8_t h[0x30];
     if (pread(pack->fd, h, sizeof h, 0) != (ssize_t)sizeof h) {
         *error = "short header";
@@ -372,8 +379,13 @@ bool pack_load(Pack *pack, std::string *error) { // 10da5830, 10da5a10, 10da5cd0
     std::memcpy(&end, h + 40, 8);
     // the comment after the tree must read (10da5a10, 10da2230), then the tree [tree, end) goes into memory
     uint32_t comment = 0;
-    if (end < tree || end - tree > (1u << 30) || pread(pack->fd, &comment, 4, (off_t)end) != 4) {
+    if (end < tree || end > pack->file_size || end - tree > (1u << 30) ||
+        pread(pack->fd, &comment, 4, (off_t)end) != 4) {
         *error = "bad header";
+        return false;
+    }
+    if (comment > pack->file_size - end) { // a damaged or hostile archive: no allocation from its numbers
+        *error = "bad comment";
         return false;
     }
     if (comment) {
@@ -417,6 +429,11 @@ bool pack_read_entry(const Pack &pack, const Node &node, std::vector<uint8_t> *o
     if (size == 0 && (node.size >> 32) == 0)
         return true;
     if (node.encryption != 0)
+        return false;
+    // the archive's numbers are checked before anything is allocated from them: the packed bytes must lie inside the
+    // file, and an entry inflates to at most 1 GB (the guest has 4 GB in all)
+    if ((node.size >> 32) || (node.stored >> 32) || node.offset > pack.file_size ||
+        stored > pack.file_size - node.offset || size > (1u << 30))
         return false;
     std::vector<uint8_t> packed(stored);
     if (pack_pread(pack, node.offset, packed.data(), stored) != (int64_t)stored)
