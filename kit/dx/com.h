@@ -31,6 +31,7 @@
 #include <string>
 #include <deque>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 static const uint32_t COM_MAGIC = 0x504f504du; // 'POPM'
@@ -453,6 +454,10 @@ ComObj *com_new(ComKind kind);
 // created. Test103 (memory gate): a destroyed object is freed once more than COM_GRAVEYARD later objects have
 // been destroyed, and its slot becomes null. Ids are never reused, so a stale id still finds nothing.
 extern std::deque<std::unique_ptr<ComObj>> *g_com_objects;
+// Held while the table changes (com_new, a slot freed, com_reset). Batoned threads read it without, as before; a
+// free thread that looks objects up (fmodex's DirectSound calls, Gothic 3 session 21) reads it through
+// com_get_shared / com_this_shared, which take it, so it never sees the deque mid-growth.
+extern std::recursive_mutex g_com_mutex;
 inline ComObj *com_get(uint32_t id) {
     std::deque<std::unique_ptr<ComObj>> *v = g_com_objects;
     if (!id || !v || id > v->size())
@@ -465,6 +470,10 @@ inline ComObj *com_get(uint32_t id) {
 ComObj *com_this(uint32_t addr, ComIface want = IF_NONE);
 // Same, reading `this` from the shim's first stack argument.
 ComObj *com_this_arg(X86 *c, ComIface want = IF_NONE);
+// The same under g_com_mutex, for shims a free thread may call.
+ComObj *com_get_shared(uint32_t id);
+ComObj *com_this_shared(uint32_t addr, ComIface want = IF_NONE);
+ComObj *com_this_arg_shared(X86 *c, ComIface want = IF_NONE);
 ComIface com_iface_of(uint32_t addr);
 
 // Guest address of `o` seen through `iface`, allocating the view on first use.

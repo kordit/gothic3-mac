@@ -7,6 +7,7 @@
 #include <deque>
 
 std::deque<std::unique_ptr<ComObj>> *g_com_objects = nullptr; // see com.h com_get
+std::recursive_mutex g_com_mutex;
 
 namespace {
 
@@ -30,6 +31,7 @@ std::deque<uint32_t> &graveyard() {
 }
 uint64_t g_com_freed = 0;
 void bury(uint32_t id) {
+    std::lock_guard<std::recursive_mutex> lock(g_com_mutex);
     graveyard().push_back(id);
     while (graveyard().size() > COM_GRAVEYARD) {
         const uint32_t old = graveyard().front();
@@ -94,6 +96,7 @@ uint32_t build_vtable(const VtDef &d) {
 // Lifetime
 // ---------------------------------------------------------------------------
 void com_reset() {
+    std::lock_guard<std::recursive_mutex> lock(g_com_mutex);
     objects().clear();
     graveyard().clear();
     g_com_freed = 0;
@@ -106,6 +109,7 @@ void com_reset() {
 }
 
 ComObj *com_new(ComKind kind) {
+    std::lock_guard<std::recursive_mutex> lock(g_com_mutex);
     objects().push_back(std::make_unique<ComObj>());
     ComObj &o = *objects().back();
     o.id = (uint32_t)objects().size(); // ids are 1-based; 0 means none
@@ -142,6 +146,18 @@ ComObj *com_this(uint32_t addr, ComIface want) {
 
 ComObj *com_this_arg(X86 *c, ComIface want) {
     return com_this(arg(c, 0), want);
+}
+
+ComObj *com_get_shared(uint32_t id) {
+    std::lock_guard<std::recursive_mutex> lock(g_com_mutex);
+    return com_get(id);
+}
+ComObj *com_this_shared(uint32_t addr, ComIface want) {
+    std::lock_guard<std::recursive_mutex> lock(g_com_mutex);
+    return com_this(addr, want);
+}
+ComObj *com_this_arg_shared(X86 *c, ComIface want) {
+    return com_this_shared(arg(c, 0), want);
 }
 
 uint32_t com_view(ComObj *o, ComIface iface) {

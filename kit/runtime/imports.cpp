@@ -644,6 +644,22 @@ __attribute__((noinline)) bool dispatch_unallocated(X86 *c, uint32_t target) {
 // Every case imports_dispatch's own path leaves out: the verbose trace, a call
 // observer, a logging-only stub and an unknown argument count. Out of line, so
 // the common path keeps a small frame without these buffers.
+// Gothic 3 session 21: fmodex's output thread is a free thread and polls its DirectSound buffer (GetCurrentPosition,
+// Lock, Unlock) every few milliseconds. With the baton it waited behind the game's logic for seconds of a loading
+// screen and the music broke up. DirectSound's COM methods run under this lock instead, on every thread, and the
+// buffer's data methods need no baton (free_kind_of). None of them calls guest code or waits; DirectSoundEnumerate,
+// which calls the guest back, is no COM method and keeps the baton alone.
+std::recursive_mutex g_dsound_mutex;
+std::atomic<uint8_t> g_is_dsound[TRAMP_MAX]; // 0 not known yet, 1 no, 2 a DSOUND.dll COM method
+bool tramp_is_dsound(uint32_t idx, const char *desc) {
+    uint8_t v = g_is_dsound[idx].load(std::memory_order_relaxed);
+    if (!v) {
+        v = desc && !strncasecmp(desc, "DSOUND.dll!", 11) && strstr(desc, "::") ? 2 : 1;
+        g_is_dsound[idx].store(v, std::memory_order_relaxed);
+    }
+    return v == 2;
+}
+
 __attribute__((noinline)) bool dispatch_full(X86 *c, uint32_t idx, bool trace) {
     // The shim may allocate trampolines (GetProcAddress, a COM shim, a guest
     // callback), which reallocates this vector, so nothing may hold a
@@ -687,7 +703,12 @@ __attribute__((noinline)) bool dispatch_full(X86 *c, uint32_t idx, bool trace) {
     if (skip) {
         // The observer refused the call and has set the result itself.
     } else if (fn) {
-        fn(c);
+        if (tramp_is_dsound(idx, g_hot[idx].desc)) {
+            std::lock_guard<std::recursive_mutex> lk(g_dsound_mutex);
+            fn(c);
+        } else {
+            fn(c);
+        }
     } else {
         log_once(label(), "unimplemented import %s: returning 0", label());
         set_eax(c, 0);
@@ -731,7 +752,7 @@ bool sched_free_sleep(uint32_t ms);
 
 namespace {
 enum FreeKind : uint8_t { FREE_UNKNOWN, FREE_BATON, FREE_DIRECT, FREE_SLEEP, FREE_CS_ENTER, FREE_CS_TRY, FREE_CS_LEAVE,
-                          FREE_D3D, FREE_LOOKUP };
+                          FREE_D3D, FREE_LOOKUP, FREE_DSOUND };
 
 // Gothic 3 stage 5: d3dx9_40's effect code (under Engine's GetTechniqueDescription, on the render thread) asks
 // GetModuleHandleA and GetProcAddress for the same few names on every call. A module's handle and an export's
@@ -815,6 +836,19 @@ FreeKind free_kind_of(const char *desc) {
         return FREE_BATON;
     if (!strncasecmp(desc, "d3d9.dll!", 9))
         return FREE_D3D;
+    // A DirectSound buffer's data methods (g_dsound_mutex): they touch the buffer, the host mixer, the notification
+    // records (signalled through guest_event_signal_from_host) and look objects up with com_this_arg_shared. Creating,
+    // duplicating and releasing objects keep the baton: they change the COM table batoned threads read unlocked.
+    for (const char *iface : {"DSOUND.dll!IDirectSoundBuffer::", "DSOUND.dll!IDirectSoundBuffer8::"})
+        if (!strncasecmp(desc, iface, strlen(iface))) {
+            static const char *const data[] = {"GetCaps",    "GetCurrentPosition", "GetFormat",   "GetVolume",
+                                               "GetPan",     "GetFrequency",       "GetStatus",   "Lock",
+                                               "Play",       "SetCurrentPosition", "SetVolume",   "SetPan",
+                                               "SetFrequency", "Stop",             "Unlock",      "Restore"};
+            for (const char *m : data)
+                if (!strcasecmp(desc + strlen(iface), m))
+                    return FREE_DSOUND;
+        }
     for (const char *d : direct)
         if (!strcasecmp(desc, d))
             return FREE_DIRECT;
@@ -866,6 +900,11 @@ __attribute__((noinline)) bool free_dispatch(X86 *c, uint32_t target) {
         break;
     case FREE_D3D: {
         std::lock_guard<std::recursive_mutex> lk(g_d3d_mutex);
+        g_hot[idx].fn(c);
+        break;
+    }
+    case FREE_DSOUND: {
+        std::lock_guard<std::recursive_mutex> lk(g_dsound_mutex);
         g_hot[idx].fn(c);
         break;
     }
@@ -949,6 +988,9 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     const uint32_t ret_addr = rd32(c->r[R_ESP]);
     if (__builtin_expect(g_d3d_shared.load(std::memory_order_relaxed), 0) && tramp_is_d3d(idx, g_hot[idx].desc)) {
         std::lock_guard<std::recursive_mutex> lk(g_d3d_mutex);
+        fn(c);
+    } else if (__builtin_expect(tramp_is_dsound(idx, g_hot[idx].desc), 0)) {
+        std::lock_guard<std::recursive_mutex> lk(g_dsound_mutex);
         fn(c);
     } else {
         fn(c);

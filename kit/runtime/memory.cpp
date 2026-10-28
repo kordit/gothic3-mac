@@ -165,6 +165,9 @@ void log_msg(int level, const char *fmt, ...) {
 static const size_t kLogOnceKeys = 4096;
 
 bool log_once(const char *key, const char *fmt, ...) {
+    // Free threads report too (fmodex's DirectSound calls, Gothic 3 session 21).
+    static std::mutex m;
+    std::lock_guard<std::mutex> lock(m);
     static std::set<std::string> seen;
     static bool capped = false;
     if (seen.size() >= kLogOnceKeys) {
@@ -858,6 +861,7 @@ bool heap_free_guarded(uint32_t addr) {
 }
 
 bool heap_guard_check(uint32_t addr) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex); // a free thread's Unlock checks its ring
     if (!g_guards || !addr)
         return true;
     auto it = g_guards->find(addr);
@@ -865,6 +869,7 @@ bool heap_guard_check(uint32_t addr) {
 }
 
 uint32_t heap_guard_check_all() {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_guards)
         return 0;
     uint32_t bad = 0;

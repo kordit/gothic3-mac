@@ -92,11 +92,11 @@ void pcm_release(uint32_t addr) {
 }
 
 ComObj *this_dsound(X86 *c) {
-    ComObj *o = com_this_arg(c);
+    ComObj *o = com_this_arg_shared(c);
     return (o && o->kind == K_DSOUND) ? o : nullptr;
 }
 ComObj *this_buffer(X86 *c) {
-    ComObj *o = com_this_arg(c);
+    ComObj *o = com_this_arg_shared(c);
     return (o && o->kind == K_DSBUFFER) ? o : nullptr;
 }
 
@@ -300,7 +300,7 @@ void service_notifications() {
     for (NotifyRecord &n : notifies()) {
         if (n.pos.empty())
             continue;
-        ComObj *b = com_get(n.obj_id);
+        ComObj *b = com_get_shared(n.obj_id);
         if (!b || b->kind != K_DSBUFFER)
             continue;
 
@@ -1643,7 +1643,7 @@ void DS_GetCaps(X86 *c) {
 void DS_DuplicateSoundBuffer(X86 *c) {
     ComObj *ds = this_dsound(c);
     uint32_t src_ptr = arg(c, 1), out = arg(c, 2);
-    ComObj *src = src_ptr ? com_this(src_ptr) : nullptr;
+    ComObj *src = src_ptr ? com_this_shared(src_ptr) : nullptr;
     if (!ds || !src || src->kind != K_DSBUFFER || !out) {
         com_ret(c, DSERR_INVALIDPARAM);
         return;
