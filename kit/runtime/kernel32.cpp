@@ -2903,6 +2903,18 @@ void sched_expire_locked() {
 }
 
 // Caller holds g_sched_m.  The next runnable thread after `from`, or NO_THREAD.
+// Caller holds g_sched_m. A baton nobody will hand on: past the thread list, on a finished thread, or on one that
+// lent it (recomp_host_work_begin, a free thread between shims) and does not want it back. sched_handoff_on_exit_locked
+// gives the baton to thread 0 when nobody is runnable, and in Gothic 3's stage 5 thread 0 is the render thread
+// waiting without it for the logic, which waited for the baton (28.10, work/sample-w9pipe.txt). Taking a stranded
+// baton authorises no second runner: its holder runs no guest code until it asks for the baton again.
+bool baton_stranded_locked() {
+    if (g_baton >= threads().size())
+        return true;
+    const GuestThread *h = threads()[g_baton];
+    return h->finished || (h->free_run && !h->free_wants);
+}
+
 size_t sched_next_runnable_locked(size_t from) {
     size_t n = threads().size();
     for (size_t k = 1; k <= n; ++k) {
@@ -2993,7 +3005,7 @@ void sched_run_others_locked(size_t me, const char *why) {
             // second runner, because the one it is taken from is not running.
             if (g_baton == me)
                 return;
-            if (g_baton >= threads().size() || threads()[g_baton]->finished) {
+            if (baton_stranded_locked()) {
                 g_baton = me;
                 return;
             }
@@ -6118,8 +6130,8 @@ void sched_free_acquire() {
     me->free_wants = true;
     g_sched_cv.notify_all(); // a holder parked in a timed wait looks again
     while (g_baton != me->index) {
-        // A baton left on a finished thread goes to whoever asks (sched_run_others_locked does the same).
-        if (g_baton >= threads().size() || threads()[g_baton]->finished) {
+        // A stranded baton goes to whoever asks (sched_run_others_locked does the same).
+        if (baton_stranded_locked()) {
             g_baton = me->index;
             break;
         }
