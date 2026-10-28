@@ -192,10 +192,6 @@ entry_points = [0x10582ada, 0x103fd1c0]
 # lod (native/lod.c): CreateLoD's walk for a vertex by key (FUN_10548ad0), answered through a hash; on at the walk's
 # match or after it
 native_sites = [{at = 0x10548c3a, resume = [0x10548c53, 0x10548cb7]}]
-# The image cache's budget (D-045): GetOptimalCacheSizes (10274a80, the only reader) gives images this times
-# 1.951 (the 32-bit address space it caps at 0xf9c00000), 655.6 MB from 336e6. Here the pixels are not in guest
-# memory (docs/perf/ladowanie-natywne.md, session 22), so 820e6, about 1.6 GB.
-data = [{at = 0x106e86a0, f64 = 820e6, was = 336e6}]
 
 [modules.aux.game]
 name = "Game.dll"
