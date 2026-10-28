@@ -349,4 +349,10 @@ void g3n_10a73590(X86 *c);
 #define FN_10ae30f0 g3n_10ae30f0 /* Game zlib deflate, the save writer's only */
 void g3n_10ae30f0(X86 *c);
 
+/* pipe (pipe.c): stage 5, the logic's frees deferred while the render runs beside it (RECOMP_G3_PIPE=1) */
+#define FN_10020090 g3n_10020090 /* SharedBase MemHeap::Free */
+void g3n_10020090(X86 *c);
+#define FN_10020470 g3n_10020470 /* SharedBase MemHeap::FreeShortUsage */
+void g3n_10020470(X86 *c);
+
 #endif

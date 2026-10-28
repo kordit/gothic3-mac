@@ -32,6 +32,8 @@ void g3_phase(const char *name, uint64_t t0) {
 }
 
 void g3_load_frame(void); /* loading.c */
+int g3_pipe_render_begin(void); /* pipe.c */
+void g3_pipe_render_end(X86 *c);
 extern uint64_t g3_load_deferred, g3_load_queued;
 
 void g3n_10276100(X86 *c) {
@@ -44,7 +46,10 @@ void g3n_10276100(X86 *c) {
         told_deferred = g3_load_deferred;
     }
     const uint64_t t0 = g3_phase_now();
+    const int piped = g3_pipe_render_begin(); /* stage 5: beside the logic thread, without the baton */
     fn_10276100(c);
+    if (piped)
+        g3_pipe_render_end(c);
     g3_phase("render", t0);
 }
 

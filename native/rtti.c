@@ -17,10 +17,14 @@
  *
  * G3_RTTI_CHECK=1 runs the original for every call too and logs any answer that differs. Each module that links its own
  * copy (the exe, Engine, SharedBase, Game, GUI, Script, Script_Game, FileSystem, Importer: the VS2005 CRT's) has a
- * g3n_ of its own, with the same arguments. Callers are guest code under the baton, so the table needs no lock. */
+ * g3n_ of its own, with the same arguments. Callers were guest code under the baton; with the logic on a thread of
+ * its own beside the render (stage 5, pipe.c) two can cast at once, so each entry has a sequence count: odd while it is
+ * written, read twice around the key. A reader that sees it change takes the original's way; a writer that finds it
+ * odd leaves it to the other. */
 #include "chunk.h"
 #include "g3_opt.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -37,6 +41,7 @@ void fn_10ec70a4(X86 *c); /* Importer ___RTDynamicCast */
 #define RT_SLOTS 8192u
 
 struct rt_entry {
+    _Atomic uint32_t seq;              /* even: stable */
     uint32_t locator, delta, src, tgt; /* key; locator 0 = empty */
     int32_t at;                        /* target from the complete object */
     uint32_t found;
@@ -74,8 +79,14 @@ static void rt_cast(X86 *c, void (*orig)(X86 *)) {
     const uint32_t complete = inptr - rd32(loc + 4u);
     uint32_t h = (loc * 2654435761u ^ src * 40503u ^ tgt * 2246822519u ^ delta) % RT_SLOTS;
     struct rt_entry *e = &rt_table[h];
-    if (e->locator == loc && e->delta == delta && e->src == src && e->tgt == tgt && (e->found || !is_ref)) {
-        const uint32_t mine = e->found ? complete + (uint32_t)e->at : 0u;
+    const uint32_t s0 = atomic_load_explicit(&e->seq, memory_order_acquire);
+    const int hit = !(s0 & 1u) && e->locator == loc && e->delta == delta && e->src == src && e->tgt == tgt &&
+                    (e->found || !is_ref);
+    const uint32_t e_found = e->found;
+    const int32_t e_at = e->at;
+    atomic_thread_fence(memory_order_acquire);
+    if (hit && atomic_load_explicit(&e->seq, memory_order_relaxed) == s0) {
+        const uint32_t mine = e_found ? complete + (uint32_t)e_at : 0u;
         if (rt_check < 0) {
             const char *v = getenv("G3_RTTI_CHECK");
             rt_check = v && *v == '1';
@@ -97,12 +108,18 @@ static void rt_cast(X86 *c, void (*orig)(X86 *)) {
     ++g3_rtti_misses;
     orig(c);
     const uint32_t got = c->r[R_EAX];
+    uint32_t s = atomic_load_explicit(&e->seq, memory_order_relaxed);
+    if ((s & 1u) || !atomic_compare_exchange_strong_explicit(&e->seq, &s, s + 1u, memory_order_acquire,
+                                                             memory_order_relaxed))
+        return;
+    atomic_thread_fence(memory_order_release);
     e->locator = loc;
     e->delta = delta;
     e->src = src;
     e->tgt = tgt;
     e->found = got != 0u;
     e->at = (int32_t)(got - complete);
+    atomic_store_explicit(&e->seq, s + 2u, memory_order_release);
 }
 
 void g3n_10ae9c77(X86 *c) {

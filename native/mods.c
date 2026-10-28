@@ -1349,12 +1349,20 @@ static void g3f_process(X86 *c) {
 uint64_t g3_phase_now(void);                    /* phases.c */
 void g3_phase(const char *name, uint64_t t0);  /* phases.c */
 
-void g3n_10276490(X86 *c) {
+int g3_pipe_process(X86 *c); /* pipe.c: stage 5, RECOMP_G3_PIPE=1 */
+
+/* Process as it runs without stage 5; with it, on the logic thread (pipe.c). */
+void g3_process_body(X86 *c) {
     const uint64_t t0 = g3_phase_now();
     fn_10276490(c);
     if (g3f())
         g3f_process(c);
     g3_phase("logic", t0);
+}
+
+void g3n_10276490(X86 *c) {
+    if (!g3_pipe_process(c))
+        g3_process_body(c);
 }
 
 #define STR_TEXT 0x10005680u          /* bCString::GetText(void) const */
