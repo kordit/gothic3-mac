@@ -16,7 +16,6 @@ while [ $i -lt 90 ]; do
   i=$((i + 1))
 done
 steps="${steps}key W up\nwait 5000\n"
-opt=${WALK_OPT:-all}
-RECOMP_G3OPT="$opt" BENCH_PROFILE="$p" BENCH_MODS=1 BENCH_STEPS="$steps" \
-  sh tools/bench.sh "soak-$label" 1200 world "G3OPT=$opt" "$@" > /dev/null 2>&1
+BENCH_PROFILE="$p" BENCH_MODS=1 BENCH_STEPS="$steps" \
+  sh tools/bench.sh "soak-$label" 1200 world "$@" > /dev/null 2>&1
 echo done > "work/soak-$label.done"

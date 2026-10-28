@@ -14,13 +14,13 @@ b="$PWD/work/autostart-$prof-b/profile"
 .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.prepare_profile('$prof', '$b')" > /dev/null
 [ -d "$b/shader-warm" ] || cp -R "work/autostart-$prof/profile/shader-warm" "$b/" 2>/dev/null
 if [ "$mode" = world ]; then
-  ( BENCH_BIN=$ba sh tools/bench.sh "$la" 170 world 'G3OPT=all' > /dev/null 2>&1 ) &
+  ( BENCH_BIN=$ba sh tools/bench.sh "$la" 170 world > /dev/null 2>&1 ) &
   sleep 2
-  ( BENCH_BIN=$bb BENCH_PROFILE="$b" sh tools/bench.sh "$lb" 170 world 'G3OPT=all' > /dev/null 2>&1 ) &
+  ( BENCH_BIN=$bb BENCH_PROFILE="$b" sh tools/bench.sh "$lb" 170 world > /dev/null 2>&1 ) &
 else
-  BENCH_BIN=$ba sh tools/bench_fight.sh "$la" 'G3OPT=all' &
+  BENCH_BIN=$ba sh tools/bench_fight.sh "$la" &
   sleep 3
-  BENCH_BIN=$bb BENCH_PROFILE="$b" sh tools/bench_fight.sh "$lb" 'G3OPT=all' &
+  BENCH_BIN=$bb BENCH_PROFILE="$b" sh tools/bench_fight.sh "$lb" &
 fi
 wait
 .venv/bin/python tools/bench_sum.py "$la" "$lb" > "work/bench-ab-$la-$lb.sum"

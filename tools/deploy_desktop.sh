@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 app=build/Gothic3Recomp.app
 dest="$HOME/Desktop/Gothic3Recomp.app"
 profile="$HOME/Library/Application Support/Gothic 3 Native"
-[ -x "$app/Contents/MacOS/Gothic3Recomp" ] || { echo "no $app: build it first (tools/build.py --target app)"; exit 1; }
+[ -x "$app/Contents/MacOS/Gothic3Recomp" ] || { echo "no $app: build it first (tools/build.py)"; exit 1; }
 if pgrep -x Gothic3Recomp > /dev/null; then
   echo "the game is running (PID $(pgrep -x Gothic3Recomp | tr '\n' ' ')): close it first"; exit 1
 fi

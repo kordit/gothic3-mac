@@ -3,15 +3,16 @@
  * G3OPT=<groups> in the trace control file (RECOMP_TRACE_CONTROL, read once a second) turns
  * groups on while the game runs: a comma list of rand, particles, occl, d3d, str, mem, audio, vec, scene, leaf, shadow, occlmove, pdo, vfs, cull, ai, move, uv, exec, zlib, anim, load, rtti, lod, "all" or "none", and
  * "-name" to drop one ("all,-occl"). Without the key the start value stays: RECOMP_G3OPT, else
- * "all". Each group's g3n_ functions run their native code only while its bit is set, so one
- * run can compare a group on and off standing in one place (FRAMES=10 logs the frame time). */
+ * G3OPT_DEFAULT, the one setup the player plays and every bench measures (session 19). Each group's
+ * g3n_ functions run their native code only while its bit is set (a diagnosis may turn one off; the
+ * player's game and the benches never do). */
 #include "g3_opt.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-volatile uint32_t g3_opt = 0xffffffffu;
+volatile uint32_t g3_opt = 0xffffffffu; /* g3_opt_init sets the start value */
 
 static const struct {
     const char *name;
@@ -52,7 +53,10 @@ static void report(const char *why) {
     fprintf(stderr, "%s\n", line);
 }
 
-static uint32_t g3_start = 0xffffffffu;
+/* Everything but vfs, cull and ai: with them a navigation zone's class name ("gCNavZone_PS") is read after it was
+ * freed, and NPC navigation warns on every frame (session 18). They come back once that is fixed. */
+#define G3OPT_DEFAULT (0xffffffffu & ~(G3OPT_VFS | G3OPT_CULL | G3OPT_AI))
+static uint32_t g3_start = G3OPT_DEFAULT;
 void g3_console_control(const char *text); /* native/console.c: G3CMD= lines */
 void g3_mods_control(const char *text);    /* native/mods.c: G3LOC= lines */
 volatile uint32_t g3_occl_vis;
