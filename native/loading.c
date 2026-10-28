@@ -52,20 +52,28 @@ static uint32_t ld_frame;                  /* frames since start */
 
 /* Images already queued: until the loader thread starts one its state stays 2, and every draw of it would queue it
  * again (DoWork loads unconditionally). An entry is good for LD_REQUEUE frames, then a still missing image may go
- * again (cached out and needed anew, or an item that failed). */
+ * again (cached out and needed anew, or an item that failed).
+ *
+ * Session 16 part 2, the player's "shadows are gone": an image drawn without its texture is black (SetTexture NULL),
+ * and after a load the cave's terrain was black for about 6 s under a busy CPU (work/look-str-heap) while the one
+ * loader thread caught up. One still missing LD_FALLBACK frames (about 0.75 s) after it was queued is bound the
+ * original's way, in the draw, as before stage 4; so is every bind in the first seconds after a load (LD_GRACE_NS). */
 #define LD_SLOTS 2048u
 #define LD_REQUEUE 600u
+#define LD_FALLBACK 45u
 static uint32_t ld_res[LD_SLOTS], ld_when[LD_SLOTS];
+uint64_t g3_load_fallback; /* binds that waited too long and went the original's way */
 
-static int ld_queued_recently(uint32_t res) {
+/* Frames since `res` was queued, or ~0u when it was not (or so long ago that it may go again). */
+static uint32_t ld_queued_age(uint32_t res) {
     uint32_t h = (res >> 3) * 2654435761u % LD_SLOTS;
     for (uint32_t k = 0; k < 16u; ++k, h = (h + 1u) % LD_SLOTS) {
         if (ld_res[h] == res)
-            return ld_frame - ld_when[h] < LD_REQUEUE;
+            return ld_frame - ld_when[h] < LD_REQUEUE ? ld_frame - ld_when[h] : ~0u;
         if (ld_res[h] == 0u)
-            return 0;
+            return ~0u;
     }
-    return 0;
+    return ~0u;
 }
 
 static void ld_note_queued(uint32_t res) {
@@ -109,14 +117,27 @@ void g3n_1044f1d0(X86 *c) {
     }
 }
 
+static uint64_t ld_now(void) {
+    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+
+/* For LD_GRACE_NS after a stop of more than LD_GAP_NS between frames (a loading screen, a save's load), binds go the
+ * original's way: the first frames of a newly loaded world would otherwise draw everything not in yet without its
+ * texture, black, for the seconds the one loader thread needs (session 16 part 2, the player's cave after F9). */
+#define LD_GAP_NS 500000000ull
+#define LD_GRACE_NS 4000000000ull
+static uint64_t ld_last_frame_ns, ld_grace_until_ns;
+static int ld_grace;
+
 /* A new frame (DoRender, phases.c): the per-frame allowance for loads done the original's way starts again. */
 void g3_load_frame(void) {
     ld_frame_sync_ns = 0;
     ++ld_frame;
-}
-
-static uint64_t ld_now(void) {
-    return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    const uint64_t now = ld_now();
+    if (ld_last_frame_ns && now - ld_last_frame_ns > LD_GAP_NS)
+        ld_grace_until_ns = now + LD_GRACE_NS;
+    ld_grace = now < ld_grace_until_ns;
+    ld_last_frame_ns = now;
 }
 
 /* FUN_104a1260 (thiscall ECX = the component; stack: the shader state, the unit's parameters; RET 8; AL = bound).
@@ -127,7 +148,7 @@ void g3n_104a1260(X86 *c) {
     uint32_t *const r = c->r;
     const uint32_t comp = r[R_ECX], esp = r[R_ESP];
     const uint32_t img = rd32(comp + 0x34u);
-    if (!G3OPT(LOAD) || !ld_pool || img == 0u || rd32(img + 0x10u) == 6u || !g3_on_game_thread()) {
+    if (!G3OPT(LOAD) || !ld_pool || img == 0u || rd32(img + 0x10u) == 6u || ld_grace || !g3_on_game_thread()) {
         fn_104a1260(c);
         return;
     }
@@ -154,12 +175,29 @@ void g3n_104a1260(X86 *c) {
         fn_104a1260(c);
         return;
     }
-    if (rd32(res + 0x10u) != 3u && !ld_queued_recently(res)) {
-        const uint32_t lazy = 3u;
-        r[R_ECX] = res;
-        guest_call(c, LD_RES_LOAD, &lazy, 1);
-        ld_note_queued(res);
-        ++g3_load_queued;
+    const uint32_t age = ld_queued_age(res);
+    if (age != ~0u && age >= LD_FALLBACK) {
+        static int told;
+        if (told < 40) {
+            ++told;
+            fprintf(stderr, "[g3] load: an image still not in %u frames after it was queued (resource vtable %08x, "
+                            "state %u, behaviour %u, image state %u): bound in the draw\n",
+                    age, rd32(res), rd32(res + 0x10u), rd32(res + 0x18u), rd32(img + 0x10u));
+        }
+        ++g3_load_fallback;
+        for (int i = 0; i < 8; ++i)
+            r[i] = saved[i];
+        fn_104a1260(c);
+        return;
+    }
+    if (age == ~0u) {
+        if (rd32(res + 0x10u) != 3u) { /* 3: queued already, by the engine */
+            const uint32_t lazy = 3u;
+            r[R_ECX] = res;
+            guest_call(c, LD_RES_LOAD, &lazy, 1);
+            ++g3_load_queued;
+        }
+        ld_note_queued(res); /* from now on its wait counts towards LD_FALLBACK */
     }
     ++g3_load_deferred;
     const uint32_t unit = rd32(unit_par + 0x28u);
