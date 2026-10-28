@@ -27,7 +27,8 @@ profile=$(.venv/bin/python -c "import os, sys; sys.path.insert(0, 'tools'); impo
 # - host settings: the player's mod-settings.json (BENCH_PLAYER_SETTINGS=0 keeps the profile's own);
 # - drawable: the player's screen, 3456x2170 (BENCH_DRAWABLE another size);
 # - game data: the player's game folder, read only, when RECOMP_EXE is unset (BENCH_GAME=stage runs on stage/), with
-#   the archives the player's profile lays over its Data (Waste Data Patch 2.0, D-040) linked into this profile.
+#   the archives the player's profile lays over its Data (Waste Data Patch 2.0, D-040) linked into this profile
+#   (BENCH_DATA_PATCHES=0 leaves them out).
 # ge3.ini, UserOptions.ini and Shader.Cache come from the player's profile already (tools/run.py prepare_profile).
 player="$HOME/Library/Application Support/Gothic 3 Native"
 if [ "${BENCH_MODS:-1}" = 1 ]; then
@@ -42,7 +43,7 @@ mkdir -p "$profile/Data"
 for f in "$profile"/Data/*.pak "$profile"/Data/*.cpt "$profile"/Data/*.p[0-9][0-9]; do
   [ -L "$f" ] && rm -f "$f"
 done
-for f in "$player"/Data/*.pak "$player"/Data/*.cpt "$player"/Data/*.p[0-9][0-9]; do
+[ "${BENCH_DATA_PATCHES:-1}" = 1 ] && for f in "$player"/Data/*.pak "$player"/Data/*.cpt "$player"/Data/*.p[0-9][0-9]; do
   [ -e "$f" ] && ln -s "$f" "$profile/Data/${f##*/}"
 done
 game_exe="$player/game/Gothic3Final.exe"
