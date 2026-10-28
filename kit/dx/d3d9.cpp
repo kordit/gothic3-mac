@@ -35,6 +35,7 @@
 #include "host_d9.h"
 #include "d3d9_msaa.h"
 #include "../host/gpu_time.h"
+#include <mutex>
 #include <array>
 #include <unordered_map>
 #include <map>
@@ -242,7 +243,10 @@ struct Phase {
 Phase g_phases[8];
 int g_phase_count = 0;
 } // namespace
+// Gothic 3 stage 5: the logic's phase comes from a thread of its own while the render adds its waits.
+static std::mutex g_phase_mutex;
 extern "C" void recomp_phase_add(const char *name, uint64_t ns) {
+    std::lock_guard<std::mutex> lk(g_phase_mutex);
     for (int i = 0; i < g_phase_count; ++i)
         if (g_phases[i].name == name || !strcmp(g_phases[i].name, name)) {
             g_phases[i].ns += ns;
@@ -255,6 +259,7 @@ extern "C" void recomp_phase_add(const char *name, uint64_t ns) {
 // A slow frame's phases, as " (name X ms, ...)", and every phase's frame share cleared for the next one. A phase
 // ends where its code returns, so "render" here is mostly the frame before (its present is this interval's start).
 static void phases_frame(char *out, size_t cap, bool want) {
+    std::lock_guard<std::mutex> lk(g_phase_mutex);
     int n = 0;
     out[0] = 0;
     for (int i = 0; i < g_phase_count; ++i) {
@@ -271,6 +276,7 @@ static void phases_report(uint64_t frames, double s) {
     const uint64_t gpu_us = g_host_game_gpu_us.load(std::memory_order_relaxed);
     const double gpu_ms = frames ? (gpu_us - gpu_us0) / 1000.0 / frames : 0.0;
     gpu_us0 = gpu_us;
+    std::lock_guard<std::mutex> lk(g_phase_mutex);
     if (!g_phase_count || !frames)
         return;
     char line[512];

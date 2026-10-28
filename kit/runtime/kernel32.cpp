@@ -6098,6 +6098,11 @@ extern "C" void recomp_host_work_end() {
     g_sched_m.unlock();
 }
 
+// A guest thread called ExitProcess: a game's own host-side wait (Gothic 3 native/pipe.c) gives up on it.
+extern "C" bool recomp_exit_pending() {
+    return g_exit_requested;
+}
+
 // True on the process's main guest thread, and on a thread that is no guest thread at all.
 extern "C" bool recomp_cur_is_main_thread() {
     return !sched_is_guest_thread() || cur_thread()->is_main;

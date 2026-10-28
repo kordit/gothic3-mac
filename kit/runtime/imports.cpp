@@ -11,7 +11,9 @@ void sched_checkpoint();
 #include "memory.h"
 #include "../platform/ab_phase.h"
 
+#include <mutex>
 #include <map>
+#include <unordered_map>
 #include <atomic>
 #include <strings.h>
 #include <set>
@@ -728,8 +730,48 @@ void sched_free_leave_critsec(uint32_t cs);
 bool sched_free_sleep(uint32_t ms);
 
 namespace {
-enum FreeKind : uint8_t { FREE_UNKNOWN, FREE_BATON, FREE_DIRECT, FREE_SLEEP, FREE_CS_ENTER, FREE_CS_TRY, FREE_CS_LEAVE };
+enum FreeKind : uint8_t { FREE_UNKNOWN, FREE_BATON, FREE_DIRECT, FREE_SLEEP, FREE_CS_ENTER, FREE_CS_TRY, FREE_CS_LEAVE,
+                          FREE_D3D, FREE_LOOKUP };
+
+// Gothic 3 stage 5: d3dx9_40's effect code (under Engine's GetTechniqueDescription, on the render thread) asks
+// GetModuleHandleA and GetProcAddress for the same few names on every call. A module's handle and an export's
+// address do not change once the module is in, so a free thread's answer is remembered by its arguments: the first
+// one runs with the baton, the rest from the table. A failed lookup is not remembered.
+std::mutex g_lookup_mutex;
+std::unordered_map<std::string, uint32_t> g_lookups;
+std::string lookup_key(uint32_t idx, X86 *c) {
+    std::string k = std::to_string(idx) + ':';
+    const bool proc = idx < g_hot_count && g_hot[idx].desc && strcasestr(g_hot[idx].desc, "GetProcAddress");
+    uint32_t name = arg(c, 0);
+    if (proc) {
+        k += std::to_string(name) + ':';
+        name = arg(c, 1);
+        if (name < 0x10000u)
+            return k + '#' + std::to_string(name); // by ordinal
+    }
+    if (!name)
+        return k + '0';
+    for (uint32_t i = 0; i < 260u && gm_valid(name + i, 1) && g_mem[name + i]; ++i)
+        k += (char)tolower(g_mem[name + i]);
+    return k;
+}
 std::atomic<uint8_t> g_free_kind[TRAMP_MAX];
+
+// Gothic 3 stage 5 (recomp_d3d_shared): a guest thread renders without the baton while another runs the game's
+// logic with it. Direct3D 9's shims then run under a lock of their own instead of the baton, on both: the free
+// render thread takes it in free_dispatch, a batoned thread in imports_dispatch while the mode is on. Recursive: a
+// shim can call another (a device's Release releasing its surfaces).
+std::recursive_mutex g_d3d_mutex;
+std::atomic<bool> g_d3d_shared{false};
+std::atomic<uint8_t> g_is_d3d[TRAMP_MAX]; // 0 not known yet, 1 no, 2 a d3d9.dll entry
+bool tramp_is_d3d(uint32_t idx, const char *desc) {
+    uint8_t v = g_is_d3d[idx].load(std::memory_order_relaxed);
+    if (!v) {
+        v = desc && !strncasecmp(desc, "d3d9.dll!", 9) ? 2 : 1;
+        g_is_d3d[idx].store(v, std::memory_order_relaxed);
+    }
+    return v == 2;
+}
 
 // By name, once per trampoline. FREE_DIRECT shims touch nothing but the guest words they are given,
 // the caller's own TLS and the host clock; everything else keeps the baton.
@@ -745,12 +787,32 @@ FreeKind free_kind_of(const char *desc) {
         // The heap has its own lock (memory.cpp g_heap_mutex, session 16).
         "KERNEL32.dll!HeapAlloc",               "KERNEL32.dll!HeapFree",
         "KERNEL32.dll!HeapReAlloc",             "KERNEL32.dll!HeapSize",
-        "KERNEL32.dll!GetProcessHeap"};
+        "KERNEL32.dll!GetProcessHeap",
+        // Gothic 3 stage 5: what the render thread calls most without the baton. The CRT's allocator is the heap
+        // above; the rest touch only the guest words they are given. SharedBase's bCTimer::GetTimeStamp (with
+        // Timer.ThreadSafe) pins the thread and reads both clocks on every call: SetThreadAffinityMask only answers,
+        // GetTickCount reads the host clock (its frame-clock hook only acts for a game's own call sites, its cadence
+        // trace is off unless asked for).
+        "KERNEL32.dll!GetCurrentThread",        "KERNEL32.dll!SetThreadAffinityMask",
+        "KERNEL32.dll!GetTickCount",
+        "msvcrt.dll!malloc",                    "msvcrt.dll!calloc",
+        "msvcrt.dll!realloc",                   "msvcrt.dll!free",
+        "msvcrt.dll!??2@YAPAXI@Z",              "msvcrt.dll!??3@YAXPAX@Z",
+        "msvcrt.dll!_strdup",                   "msvcrt.dll!memcpy",
+        "msvcrt.dll!memmove",                   "msvcrt.dll!memset",
+        "msvcrt.dll!strchr",                    "msvcrt.dll!strrchr",
+        "msvcrt.dll!strncmp",                   "msvcrt.dll!_stricmp",
+        "msvcrt.dll!_strnicmp",                 "msvcrt.dll!tolower",
+        "msvcrt.dll!toupper"};
     if (!desc)
         return FREE_BATON;
+    if (!strncasecmp(desc, "d3d9.dll!", 9))
+        return FREE_D3D;
     for (const char *d : direct)
         if (!strcasecmp(desc, d))
             return FREE_DIRECT;
+    if (!strcasecmp(desc, "KERNEL32.dll!GetModuleHandleA") || !strcasecmp(desc, "KERNEL32.dll!GetProcAddress"))
+        return FREE_LOOKUP;
     if (!strcasecmp(desc, "KERNEL32.dll!Sleep"))
         return FREE_SLEEP;
     if (!strcasecmp(desc, "KERNEL32.dll!EnterCriticalSection"))
@@ -795,6 +857,30 @@ __attribute__((noinline)) bool free_dispatch(X86 *c, uint32_t target) {
         sched_free_leave_critsec(arg(c, 0));
         set_eax(c, 0);
         break;
+    case FREE_D3D: {
+        std::lock_guard<std::recursive_mutex> lk(g_d3d_mutex);
+        g_hot[idx].fn(c);
+        break;
+    }
+    case FREE_LOOKUP: {
+        const std::string key = lookup_key(idx, c);
+        {
+            std::lock_guard<std::mutex> lk(g_lookup_mutex);
+            auto it = g_lookups.find(key);
+            if (it != g_lookups.end()) {
+                set_eax(c, it->second);
+                break;
+            }
+        }
+        sched_free_acquire();
+        const bool r = imports_dispatch(c, target);
+        sched_free_release();
+        if (c->r[R_EAX]) {
+            std::lock_guard<std::mutex> lk(g_lookup_mutex);
+            g_lookups.emplace(key, c->r[R_EAX]);
+        }
+        return r;
+    }
     default:
     baton: {
         // The shim runs as it would for a batoned thread; one that never returns (ExitThread) leaves
@@ -811,6 +897,11 @@ __attribute__((noinline)) bool free_dispatch(X86 *c, uint32_t target) {
     return true;
 }
 } // namespace
+
+// Gothic 3 stage 5: Direct3D 9's shims under their own lock from now on (see g_d3d_mutex).
+extern "C" void recomp_d3d_shared(bool on) {
+    g_d3d_shared.store(on);
+}
 
 bool imports_dispatch(X86 *c, uint32_t target) {
     if (!imports_is_trampoline(target))
@@ -844,7 +935,12 @@ bool imports_dispatch(X86 *c, uint32_t target) {
     ++g_import_calls;
     // A guest exception can longjmp across fn(c): nothing here owns anything.
     const uint32_t ret_addr = rd32(c->r[R_ESP]);
-    fn(c);
+    if (__builtin_expect(g_d3d_shared.load(std::memory_order_relaxed), 0) && tramp_is_d3d(idx, g_hot[idx].desc)) {
+        std::lock_guard<std::recursive_mutex> lk(g_d3d_mutex);
+        fn(c);
+    } else {
+        fn(c);
+    }
     // Read after the shim ran, so the pointer is into the table as it is now.
     if (g_return_observer)
         g_return_observer(g_hot[idx].desc, c->r[R_EAX]);
