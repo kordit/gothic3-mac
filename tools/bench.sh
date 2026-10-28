@@ -1,67 +1,85 @@
 #!/bin/sh
-# tools/bench.sh <label> [seconds] [mode] [trace.ctl lines...]: the port without a window (pop_smoke:
-# the real Metal renderer into an offscreen target, no audio device, no cursor capture), on the
-# autostart profile of <mode> (world = NoMenu, default; tools/run.py prepares it, so the player's
-# saves and options are untouched). FRAMES=10 from the start through its own control file
-# (work/bench-<label>.ctl; work/trace.ctl belongs to a game the player runs). Log
-# work/bench-<label>.log; stopped after <seconds> (default 240) by PID.
+# tools/bench.sh <scenariusz> [etykieta]: the port without a window (pop_smoke: the real Metal renderer into an
+# offscreen target, no audio device, no cursor capture) on the player's setup, the same build and settings as their
+# game (tools/graj.sh). Scenarios:
+#   swiat      the world (the engine's NoMenu), standing, 240 s
+#   chodzenie  the player's QuickSave (F9), then about 5 minutes of walking with turns
+#   walka      a new game, then the Ardea fight at its start, swinging, 360 s
+# Everything of one run goes to work/bench-<etykieta>/ (default <scenariusz>-<MMDD-HHMM>): bench.log (frame times
+# every 10 s, FRAMES=10), the stacks of every frame over 45 ms (s-spike-*.txt, with syms.txt), and at the end a
+# summary of both on stdout (tools/bench_summary.py, tools/spike_report.py). Stopped by PID after its time.
+#
+# The player's setup, copies only, never their files (user, 28.10.2026: measurements on other data than the
+# player's never matched the game): their game folder (read only) with the archives their profile lays over Data
+# (Waste Data Patch 2.0, D-040), their active-mods.json and mod-settings.json, their ge3.ini, UserOptions.ini and
+# Shader.Cache (tools/run.py prepare_profile), their screen's drawable, 3456x2170.
 cd "$(dirname "$0")/.."
-label=$1
-secs=${2:-240}
-mode=${3:-world}
-shift 3 2>/dev/null || shift $#
-ctl="$PWD/work/bench-$label.ctl"
-printf 'FRAMES=10\n' > "$ctl"
-for line in "$@"; do printf '%s\n' "$line" >> "$ctl"; done
-script="$PWD/work/bench-$label.smoke"
-# BENCH_STEPS: smoke script lines run first (kit/host/script.h), e.g. the clicks that start a new game.
-# G3_INI_SET="Key=value,...": ge3.ini keys for this run (tools/run.py prepare_profile).
-# BENCH_BIN: another pop_smoke binary for an A/B (default build/recomp/pop_smoke).
-printf '%b' "${BENCH_STEPS:-}" > "$script"
-printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$script"
-# BENCH_PROFILE=<dir>: a profile of its own (two benches at once, an A/B under the same load), prepared as <mode>'s.
-profile=$(.venv/bin/python -c "import os, sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode', os.environ.get('BENCH_PROFILE') or None))")
-# The player's own setup by default (user, 28.10.2026: measurements on other data than the player's never matched
-# the game; the bench said 70 fps in a fight where the player had 20). Copies, never the player's files:
-# - mods: the player's active-mods.json (BENCH_MODS_FILE another list, BENCH_MODS=0 unmodded);
-# - host settings: the player's mod-settings.json (BENCH_PLAYER_SETTINGS=0 keeps the profile's own);
-# - drawable: the player's screen, 3456x2170 (BENCH_DRAWABLE another size);
-# - game data: the player's game folder, read only, when RECOMP_EXE is unset (BENCH_GAME=stage runs on stage/), with
-#   the archives the player's profile lays over its Data (Waste Data Patch 2.0, D-040) linked into this profile
-#   (BENCH_DATA_PATCHES=0 leaves them out).
-# ge3.ini, UserOptions.ini and Shader.Cache come from the player's profile already (tools/run.py prepare_profile).
+scenario=$1
+case "$scenario" in
+  swiat) mode=world; secs=240; skip=3 ;;
+  chodzenie) mode=world; secs=420; skip=12 ;;
+  walka) mode=newgame; secs=360; skip=12 ;;
+  *) echo "usage: tools/bench.sh swiat|chodzenie|walka [etykieta]" >&2; exit 2 ;;
+esac
+label=${2:-$scenario-$(date +%m%d-%H%M)}
+out="$PWD/work/bench-$label"
+rm -rf "$out" && mkdir -p "$out" || exit 1
 player="$HOME/Library/Application Support/Gothic 3 Native"
-if [ "${BENCH_MODS:-1}" = 1 ]; then
-  cp "${BENCH_MODS_FILE:-$player/active-mods.json}" "$profile/active-mods.json"
-else
-  rm -f "$profile/active-mods.json"
+bin=build/recomp/pop_smoke
+
+# The input: smoke script lines (kit/host/script.h), then the run's length.
+steps=
+if [ "$scenario" = chodzenie ]; then
+  steps='wait 70000\nkey F9 down\nwait 150\nkey F9 up\nwait 40000\n'
+  i=0
+  while [ $i -lt 30 ]; do
+    steps="${steps}key W down\nwait 7000\nmoveby 700 0\nwait 3000\nmoveby -350 0\n"
+    i=$((i + 1))
+  done
+  steps="${steps}key W up\nwait 5000\n"
+elif [ "$scenario" = walka ]; then
+  steps='wait 60000\nmove 960 600\nwait 1500\nclick left 960 600\nwait 12000\nmove 729 475\nwait 1500\nclick left 729 475\nwait 36000\n'
+  steps="${steps}key W down\nwait 1500\nkey W up\n"
+  i=0
+  while [ $i -lt 60 ]; do
+    steps="${steps}button left down\nwait 300\nbutton left up\nwait 900\nmoveby 0 0\nwait 300\n"
+    [ $((i % 6)) = 5 ] && steps="${steps}key W down\nwait 400\nkey W up\n"
+    i=$((i + 1))
+  done
 fi
-if [ "${BENCH_PLAYER_SETTINGS:-1}" = 1 ] && [ -f "$player/mod-settings.json" ]; then
-  cp "$player/mod-settings.json" "$profile/mod-settings.json"
+printf '%b' "$steps" > "$out/bench.smoke"
+printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$out/bench.smoke"
+printf 'FRAMES=10\n' > "$out/bench.ctl"
+
+profile=$(.venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode'))")
+cp "$player/active-mods.json" "$profile/active-mods.json"
+[ -f "$player/mod-settings.json" ] && cp "$player/mod-settings.json" "$profile/mod-settings.json"
+if [ "$scenario" = chodzenie ]; then
+  mkdir -p "$profile/Documents/gothic3"
+  cp -p "$player/Documents/gothic3/QuickSave.g3savcpx"* "$profile/Documents/gothic3/"
 fi
 mkdir -p "$profile/Data"
 for f in "$profile"/Data/*.pak "$profile"/Data/*.cpt "$profile"/Data/*.p[0-9][0-9]; do
   [ -L "$f" ] && rm -f "$f"
 done
-[ "${BENCH_DATA_PATCHES:-1}" = 1 ] && for f in "$player"/Data/*.pak "$player"/Data/*.cpt "$player"/Data/*.p[0-9][0-9]; do
+for f in "$player"/Data/*.pak "$player"/Data/*.cpt "$player"/Data/*.p[0-9][0-9]; do
   [ -e "$f" ] && ln -s "$f" "$profile/Data/${f##*/}"
 done
-game_exe="$player/game/Gothic3Final.exe"
-if [ -z "${RECOMP_EXE:-}" ] && [ "${BENCH_GAME:-player}" != stage ] && [ -f "$game_exe" ]; then
-  export RECOMP_EXE="$game_exe"
-fi
 .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.build_mod_view('$profile')" >&2
-# The new game's intro (G3_Intro.bik, 5354 frames, about 214 s) skipped as tools/run.py does for newgame;
-# without it a scripted new game sat at 1 draw per frame for the whole run.
-RECOMP_BINK_SKIP="${RECOMP_BINK_SKIP-G3_Intro}" \
-RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
-  RECOMP_TRACE_CONTROL="$ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE="${BENCH_DRAWABLE:-3456x2170}" \
-  nohup "${BENCH_BIN:-build/recomp/pop_smoke}" --script "$script" > "work/bench-$label.log" 2>&1 &
+nm -n "$bin" > "$out/syms.txt"
+
+# The new game's intro (G3_Intro.bik, about 214 s) skipped; without it a scripted new game sat at 1 draw per frame.
+RECOMP_EXE="$player/game/Gothic3Final.exe" RECOMP_BINK_SKIP=G3_Intro \
+  RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
+  RECOMP_TRACE_CONTROL="$out/bench.ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE=3456x2170 \
+  RECOMP_HOST_PROFILE="$out/s" RECOMP_HOST_PROFILE_SPIKE=45 \
+  nohup "$bin" --script "$out/bench.smoke" > "$out/bench.log" 2>&1 &
 pid=$!
-echo "$pid" > "work/bench-$label.pid"
+echo "$pid" > "$out/bench.pid"
 end=$(( $(date +%s) + secs + 30 ))
 while kill -0 "$pid" 2>/dev/null && [ "$(date +%s)" -lt "$end" ]; do sleep 5; done
 kill "$pid" 2>/dev/null
 sleep 4
 kill -9 "$pid" 2>/dev/null
-grep "frames, last" "work/bench-$label.log" | tail -12
+.venv/bin/python tools/bench_summary.py "$out/bench.log" "$skip"
+ls "$out"/s-spike-*.txt > /dev/null 2>&1 && .venv/bin/python tools/spike_report.py "$out" 8 | tail -3

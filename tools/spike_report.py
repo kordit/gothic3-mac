@@ -4,10 +4,10 @@ samples, self and anywhere on the stack. python3 tools/spike_report.py <dir with
 import bisect, collections, glob, os, re, sys
 d = sys.argv[1]; top = int(sys.argv[2]) if len(sys.argv) > 2 else 12
 addrs, names = [], []
-for line in open(os.path.join(d, "syms.txt")):
-    if len(line.split(None, 1)) < 2: continue
-    a, n = line.split(None, 1)
-    addrs.append(int(a, 16)); names.append(n.strip().lstrip("_"))
+for line in open(os.path.join(d, "syms.txt")):  # nm -n: "<address> <type> <name>"; undefined ones have no address
+    parts = line.split()
+    if len(parts) < 3: continue
+    addrs.append(int(parts[0], 16)); names.append(parts[2].lstrip("_"))
 def name(tok):
     if re.fullmatch(r"[0-9a-f]+", tok):
         i = bisect.bisect_right(addrs, int(tok, 16)) - 1

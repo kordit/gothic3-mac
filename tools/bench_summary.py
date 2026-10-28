@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Summary of a soak log (tools/soak.sh): per 10 s window frames over 33 and 50 ms, fps, and the
-slow-frame lines' max wait yield, wait cs and bg load. python3 tools/soak_summary.py <log> [skip_windows]"""
+"""Summary of a bench log (tools/bench.sh): per 10 s window frames over 33 and 50 ms, fps, and the
+slow-frame lines' max wait yield, wait cs and bg load. python3 tools/bench_summary.py <log> [skip_windows]"""
 import re, statistics, sys
 text = open(sys.argv[1], errors="replace").read()
 skip = int(sys.argv[2]) if len(sys.argv) > 2 else 12  # the start, the F9 load
