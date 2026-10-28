@@ -325,6 +325,16 @@ std::recursive_mutex g_heap_mutex;
 std::map<uint32_t, Blk> *g_blocks = nullptr;
 std::set<uint32_t> *g_free = nullptr;
 uint64_t g_total_allocs = 0, g_total_frees = 0;
+// Gothic 3 session 16 part 2: first fit walked every free block from the bottom, and a fragmented heap has
+// thousands of small ones there (a quick load: HeapAlloc 1.4 s of the game thread's 28 s). g_low[c]: every free
+// block below it is smaller than 1 << c, so a request of at least 1 << c bytes starts its walk there and gets the
+// block first fit always gave it. A free block that appears or grows lowers the bounds its size reaches.
+uint32_t g_low[32];
+inline void low_note(uint32_t addr, uint32_t size) {
+    for (int c = 0; c < 32 && (1u << c) <= size; ++c)
+        if (addr < g_low[c])
+            g_low[c] = addr;
+}
 
 inline uint32_t align_up(uint32_t v, uint32_t a) {
     return (v + a - 1) & ~(a - 1);
@@ -345,10 +355,12 @@ inline bool size_is_sane(uint32_t size) {
 // Records a block, keeping the free index in step.
 void put_block(uint32_t addr, uint32_t size, uint32_t req, bool used) {
     (*g_blocks)[addr] = Blk{size, req, used};
-    if (used)
+    if (used) {
         g_free->erase(addr);
-    else
+    } else {
         g_free->insert(addr);
+        low_note(addr, size);
+    }
 }
 
 void drop_block(std::map<uint32_t, Blk>::iterator it) {
@@ -392,6 +404,8 @@ void heap_reset() {
         g_free = new std::set<uint32_t>();
     g_blocks->clear();
     g_free->clear();
+    for (uint32_t &l : g_low)
+        l = 0;
     put_block(HEAP_BASE, HEAP_LIMIT - HEAP_BASE, 0, false);
     g_kit_lo = g_kit_hi = 0;
     if (GUEST_HEAP_EXTRA_SIZE >= 4 * KIT_SPAN_BYTES && kit_span_enabled()) {
@@ -525,10 +539,32 @@ uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
         align = 16;
     uint32_t need = align_up(size ? size : 1, 16);
 
-    for (uint32_t start : *g_free) {
+    // RECOMP_HEAP_CHECK_FIT=1: the walk from the bottom as well, and any other block it would have taken logged.
+    static const bool check_fit = recomp_env("HEAP_CHECK_FIT") != nullptr;
+    uint32_t ref = 0;
+    if (check_fit && !kit)
+        for (uint32_t start : *g_free) {
+            auto it = g_blocks->find(start);
+            if (kit_side(start) || it == g_blocks->end() || it->second.used)
+                continue;
+            const uint32_t user = align_up(start, align), len = it->second.size;
+            if (user >= start && user - start <= len && need <= len - (user - start)) {
+                ref = start;
+                break;
+            }
+        }
+    // The kit's own requests are few and live at the top: they walk from the bottom as before.
+    const int cls = 31 - __builtin_clz(need);
+    bool below = !kit; // every block walked so far is smaller than 1 << cls
+    for (auto fi = g_free->lower_bound(kit ? 0u : g_low[cls]); fi != g_free->end(); ++fi) {
+        const uint32_t start = *fi;
+        auto it = g_blocks->find(start);
+        if (below && (it == g_blocks->end() || it->second.size >= (1u << cls))) {
+            g_low[cls] = start;
+            below = false;
+        }
         if (kit_side(start) != kit)
             continue; // the other side of the kit span's edge
-        auto it = g_blocks->find(start);
         if (it == g_blocks->end() || it->second.used)
             continue; // index out of step
         uint32_t len = it->second.size;
@@ -540,6 +576,11 @@ uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
             continue; // does not fit
 
         uint32_t tail = len - pad - need;
+        if (check_fit && !kit && ref != start) {
+            static int told;
+            if (told++ < 20)
+                LOGW("heap_alloc: check: %u bytes from %08x, first fit from the bottom gives %08x", size, start, ref);
+        }
         drop_block(it);
         if (pad)
             put_block(start, pad, 0, false);
@@ -638,8 +679,10 @@ bool heap_free(uint32_t addr) {
         if (!prev->second.used && prev->first + prev->second.size == it->first && same_side(prev->first, it->first)) {
             prev->second.size += it->second.size;
             drop_block(it);
+            it = prev;
         }
     }
+    low_note(it->first, it->second.size);
     return true;
 }
 
