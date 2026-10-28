@@ -22,13 +22,11 @@
  * image lazily (eCResourceBase_PS::Load(3), so behaviour 2, which CacheInResource queues to the image cache's thread),
  * and the draw goes without it: the unit gets no texture (SetTexture(unit, NULL)) and the engine's records of what is
  * bound to that unit are cleared, so the next bind of any image there really binds it. Once the loader has the
- * image in, the next draw binds it as usual. LD_SYNC_MS of loading per frame still goes the original's way. */
+ * image in, the next draw binds it as usual. */
 #include "chunk.h"
 #include "g3_opt.h"
 
 #include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 #include <time.h>
 
 void fn_1026c3e0(X86 *c); /* Engine eCApplication::OnInitializeEngine(eSSetupEngine &) */
@@ -46,8 +44,6 @@ void g3_phase(const char *name, uint64_t t0);
 #define LD_ACTIVE_IMAGE 0x10862bb0u      /* eCGfxImageData::ms_pActiveImageData[unit] */
 
 static int ld_pool;                       /* the image cache was given its thread */
-static uint64_t ld_frame_sync_ns;         /* the original's loads in this frame */
-static uint64_t ld_sync_budget_ns = ~0ull; /* G3_TEX_SYNC_MS, read once */
 uint64_t g3_load_deferred, g3_load_queued; /* binds drawn without their image, images queued, for the log */
 static uint32_t ld_frame;                  /* frames since start */
 
@@ -95,27 +91,10 @@ void g3n_1026c3e0(X86 *c) {
     const uint32_t setup = rd32(c->r[R_ESP] + 4u);
     fn_1026c3e0(c);
     if (G3OPT(LOAD) && rd32(setup + LD_SETUP_IMAGE_THREADS) == 0u) {
-        /* G3_LOAD_THREADS=<n> (1-4): another count, for a measurement. */
-        const char *e = getenv("G3_LOAD_THREADS");
-        const uint32_t n = e && atoi(e) >= 1 && atoi(e) <= 4 ? (uint32_t)atoi(e) : LD_IMAGE_THREADS;
-        wr32(setup + LD_SETUP_IMAGE_THREADS, n);
+        wr32(setup + LD_SETUP_IMAGE_THREADS, LD_IMAGE_THREADS);
         ld_pool = 1;
-        fprintf(stderr, "[g3] load: the image cache gets %u loader thread%s\n", n, n == 1 ? "" : "s");
+        fprintf(stderr, "[g3] load: the image cache gets %u loader thread\n", LD_IMAGE_THREADS);
     }
-    /* G3_CACHE_THREADS=mesh,anim,sound,material,collision,vpool (session 18, a measurement): those caches get a
-     * loader thread too. The player's stutters walking in the Reddock cave were DoLoad reading archive entries
-     * inside the frame (kit hostprof spike stacks); eCApplication::CreateEngine 10270e40 names the counts (Image,
-     * Material, Mesh, Sound, Vertexpool, CollisionMesh, Animation) at these offsets of eSSetupEngine. */
-    static const struct {
-        const char *name;
-        uint32_t at;
-    } caches[] = {{"vpool", 0x64u}, {"material", 0x6cu}, {"mesh", 0x70u}, {"sound", 0x74u}, {"collision", 0x7cu}, {"anim", 0x80u}};
-    const char *more = getenv("G3_CACHE_THREADS");
-    for (size_t i = 0; G3OPT(LOAD) && more && i < sizeof caches / sizeof caches[0]; ++i)
-        if (strstr(more, caches[i].name) && rd32(setup + caches[i].at) == 0u) {
-            wr32(setup + caches[i].at, 1u);
-            fprintf(stderr, "[g3] load: the %s cache gets a loader thread (G3_CACHE_THREADS)\n", caches[i].name);
-        }
 }
 
 /* A queued item's work on a loader thread, as the phase "bg load": wall time, so it includes the stretches in which
@@ -148,9 +127,8 @@ static uint64_t ld_now(void) {
 static uint64_t ld_last_frame_ns, ld_grace_until_ns;
 static int ld_grace;
 
-/* A new frame (DoRender, phases.c): the per-frame allowance for loads done the original's way starts again. */
+/* A new frame (DoRender, phases.c). */
 void g3_load_frame(void) {
-    ld_frame_sync_ns = 0;
     ++ld_frame;
     const uint64_t now = ld_now();
     if (ld_last_frame_ns && now - ld_last_frame_ns > LD_GAP_NS)
@@ -169,16 +147,6 @@ void g3n_104a1260(X86 *c) {
     const uint32_t img = rd32(comp + 0x34u);
     if (!G3OPT(LOAD) || !ld_pool || img == 0u || rd32(img + 0x10u) == 6u || ld_grace || !g3_on_game_thread()) {
         fn_104a1260(c);
-        return;
-    }
-    if (ld_sync_budget_ns == ~0ull) {
-        const char *e = getenv("G3_TEX_SYNC_MS");
-        ld_sync_budget_ns = (uint64_t)(e ? atof(e) * 1e6 : 0.0);
-    }
-    if (ld_frame_sync_ns < ld_sync_budget_ns) {
-        const uint64_t t0 = ld_now();
-        fn_104a1260(c);
-        ld_frame_sync_ns += ld_now() - t0;
         return;
     }
     const uint32_t state = rd32(esp + 4u), unit_par = rd32(esp + 8u);

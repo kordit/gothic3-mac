@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Stacks of slow frames (kit hostprof, RECOMP_HOST_PROFILE_SPIKE): per spike file the functions with the most
+samples, self and anywhere on the stack. python3 tools/spike_report.py <dir with s-spike-*.txt and syms.txt> [top]"""
+import bisect, collections, glob, os, re, sys
+d = sys.argv[1]; top = int(sys.argv[2]) if len(sys.argv) > 2 else 12
+addrs, names = [], []
+for line in open(os.path.join(d, "syms.txt")):
+    if len(line.split(None, 1)) < 2: continue
+    a, n = line.split(None, 1)
+    addrs.append(int(a, 16)); names.append(n.strip().lstrip("_"))
+def name(tok):
+    if re.fullmatch(r"[0-9a-f]+", tok):
+        i = bisect.bisect_right(addrs, int(tok, 16)) - 1
+        return names[i] if i >= 0 else tok
+    return tok.split("+")[0]
+tot_incl = collections.Counter(); tot_self = collections.Counter(); grand = 0
+files = sorted(glob.glob(os.path.join(d, "s-spike-*.txt")), key=lambda p: int(re.search(r"spike-(\d+)-", p).group(1)))
+for path in files:
+    ms = re.search(r"spike-\d+-(\d+)\.txt", path).group(1)
+    self_c = collections.Counter(); incl = collections.Counter(); n = 0
+    for line in open(path):
+        parts = line.split()
+        c = int(parts[0]); stack = [name(t) for t in parts[1:]]
+        n += c
+        if stack: self_c[stack[0]] += c
+        for f in set(stack): incl[f] += c
+    grand += n; tot_incl.update(incl); tot_self.update(self_c)
+    print("== %s ms, %d samples: self %s" % (ms, n, ", ".join("%s %d" % kv for kv in self_c.most_common(4))))
+    print("   on stack: " + ", ".join("%s %d" % kv for kv in incl.most_common(top) if not kv[0].startswith(("start", "main", "boot_run", "run_entry"))))
+print("\n== all %d spikes, %d samples" % (len(files), grand))
+print("self:", ", ".join("%s %d" % kv for kv in tot_self.most_common(top)))
+print("on stack:", ", ".join("%s %d" % kv for kv in tot_incl.most_common(top * 2)))
