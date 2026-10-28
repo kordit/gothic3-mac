@@ -109,6 +109,20 @@ class LoadTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "physical_memory_mb"):
                     game_config.load(game)
 
+    def test_processors_default_1_and_bounded(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            game = Path(tmp)
+            stub = (ROOT / "games/stub/game.toml").read_text()
+            (game / "globals.toml").write_text("")
+            for setting, value in (("", 1), ("processors = 0\n", 0), ("processors = 8\n", 8)):
+                (game / "game.toml").write_text(stub.replace("[game]\n", "[game]\n" + setting))
+                self.assertIn("#define RECOMP_PROCESSORS %du" % value,
+                              gen_game_config.render_header(game_config.load(game)))
+            for bad in ("-1", "33", "true", '"4"'):
+                (game / "game.toml").write_text(stub.replace("[game]\n", "[game]\nprocessors = %s\n" % bad))
+                with self.assertRaisesRegex(ValueError, "processors"):
+                    game_config.load(game)
+
     def test_data_dir_name_defaults_to_app_name_and_rejects_paths(self):
         with tempfile.TemporaryDirectory() as tmp:
             game = Path(tmp)

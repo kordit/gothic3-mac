@@ -52,6 +52,7 @@ def render_header(cfg):
     lines.append("#define RECOMP_CPUID_BRAND_INDEX 0x%02xu" % game["cpu_brand_index"])
     lines.append("#define RECOMP_QPC_US %d" % game["qpc_us"])
     lines.append("#define RECOMP_PHYSICAL_MEMORY_MB %du" % game["physical_memory_mb"])
+    lines.append("#define RECOMP_PROCESSORS %du" % game.get("processors", 1))
     lines.append("#define RECOMP_FREE_THREADS_DEFAULT %s" % json.dumps(game.get("free_threads", "")))
     lines.append("#define RECOMP_VIRTUAL_MEMORY_MB %du" % game.get("virtual_memory_mb", 2047))
     lines.append("#define RECOMP_D3D9_PRESENT_ASYNC_DEFAULT %d" % game.get("present_async", 0))
