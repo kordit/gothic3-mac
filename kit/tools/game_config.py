@@ -5,6 +5,7 @@ tomllib, so the pinned tomli is the fallback."""
 
 from pathlib import Path
 import re
+import struct
 
 try:
     import tomllib
@@ -486,7 +487,22 @@ def load_aux_modules(cfg, game_dir, source):
                 for s in sites):
             raise ValueError("%s: [modules.aux.%s] native_sites are {at, resume = [...]} addresses inside the module"
                              % (source, key))
+        # Values in the module's data the loader replaces after mapping it, each only if the image still holds
+        # the expected one: [{at = 0x106e86a0, f64 = 820e6, was = 336e6}] (f64: a double, u32: a dword).
+        patches = entry.get("data", [])
+        if not isinstance(patches, list) or any(
+                not isinstance(d, dict) or type(d.get("at")) is not int or len(set(d) & {"f64", "u32"}) != 1
+                or set(d) - {"at", "f64", "u32", "was"} or "was" not in d
+                or not base <= d["at"] <= base + size - (8 if "f64" in d else 4)
+                or ("u32" in d and not all(type(d[k]) is int and 0 <= d[k] < 1 << 32 for k in ("u32", "was")))
+                or ("f64" in d and not all(type(d[k]) in (int, float) for k in ("f64", "was")))
+                for d in patches):
+            raise ValueError("%s: [modules.aux.%s] data are {at, f64 or u32, was} values inside the module"
+                             % (source, key))
         modules.append({
+            "data": [(d["at"], 8, struct.unpack("<Q", struct.pack("<d", float(d["was"])))[0],
+                      struct.unpack("<Q", struct.pack("<d", float(d["f64"])))[0]) if "f64" in d
+                     else (d["at"], 4, d["was"], d["u32"]) for d in patches],
             "native_sites": [{"at": s["at"], "resume": list(s.get("resume", []))} for s in sites],
             "import_forwards": sorted((k.split("!")[0].lower(), k.split("!")[1], v) for k, v in forwards.items()),
             "dead_table_entries": dead_table_entries(entry.get("dead_table_entries", []), source,
