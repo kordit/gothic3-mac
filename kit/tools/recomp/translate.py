@@ -4483,7 +4483,11 @@ class Translator(object):
                 L.append("case %s: goto L_%08x;" % (hexlit(t), t))
             L.extend(["default: break;", "}", "}"])
             self.stats["_jmp_indirect_tail"] += 1
-            L.append("c->eip = %s; recomp_jump(c, t_); return;" % hexlit(ins.addr))
+            if INLINE_CALL_CACHE:   # seh.h recomp_jump_cached: JMP [IAT] into another module learns its target
+                L.append("c->eip = %s; { static uint64_t jc_ = 0; recomp_jump_cached(c, t_, &jc_); } return;"
+                         % hexlit(ins.addr))
+            else:
+                L.append("c->eip = %s; recomp_jump(c, t_); return;" % hexlit(ins.addr))
             return L
         self.stats["_jmp_table"] += 1
         self.stats["_jmp_table_entries"] += len(targets)

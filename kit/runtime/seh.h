@@ -33,6 +33,33 @@ static inline uint32_t recomp_seh_pending_target(void) {
     return recomp_seh_pending_target_tls();
 }
 void recomp_seh_intercept(X86 *c, uint32_t target);
+
+/* The inline cache of an indirect JMP out of its function ([translate] inline_call_cache), as recomp_call_cached has
+ * it for a CALL: MSVC ends many functions with JMP [IAT] into another module (a base destructor, a thunk), and each
+ * went through recomp_jump: the image's table searched and missed, then the modules' (Gothic 3 fight, 28 Oct 2026:
+ * recomp_jump, recomp_module_call and module_entry 4.7% of the main thread). The site's word is the same as a call
+ * site's; a pending SEH landing, a frame watch and the profiler take recomp_jump. */
+void recomp_jump_ic(X86 *c, uint32_t target, uint64_t *ic);
+static inline void recomp_jump_cached(X86 *c, uint32_t target, uint64_t *ic) {
+    const uint64_t e = __atomic_load_n(ic, __ATOMIC_RELAXED);
+    if (__builtin_expect((uint32_t)(e >> 32) == target && e != 0 && !recomp_frame_watch &&
+                             __atomic_load_n(&recomp_seh_pending_threads, __ATOMIC_RELAXED) == 0, 1)) {
+        if (((e >> 24) & 0xffu) == RECOMP_IC_SHIM) {
+            recomp_shim_call(c, target);
+            return;
+        }
+        const RecompModule *m = recomp_ic_tables[(e >> 24) & 0xffu];
+        const uint32_t i = (uint32_t)e & 0xffffffu;
+#ifndef RECOMP_NO_HOOKS
+        if (!__atomic_load_n(m->hooked[i], __ATOMIC_ACQUIRE))
+#endif
+        {
+            m->base_ptrs[i](c);
+            return;
+        }
+    }
+    recomp_jump_ic(c, target, ic);
+}
 /* Verbose-only, bounded validation. Logs the first failure and last good point. */
 void recomp_seh_validate_chain(X86 *c, const char *phase, const char *detail);
 

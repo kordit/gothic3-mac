@@ -512,6 +512,41 @@ void recomp_call_ic(X86 *c, uint32_t target, uint64_t *ic) {
     recomp_call(c, target);
 }
 
+// seh.h recomp_jump_cached's miss: a function entry the image or a module owns, or an import shim, is learnt by the
+// site's word and run as recomp_jump runs it; anything else (a CALL continuation, a gap) is recomp_jump's. A jump from
+// a free module (c->eip is the JMP) never learns, so recomp_jump's own path keeps its baton handling.
+void recomp_jump_ic(X86 *c, uint32_t target, uint64_t *ic) {
+    if (recomp_profile_enabled || !ic || recomp_frame_watch || recomp_seh_pending_target() ||
+        (__builtin_expect(g_free_hi != 0, 0) && free_module_of(c->eip) >= 0)) {
+        recomp_jump(c, target);
+        return;
+    }
+    if (imports_is_trampoline(target)) {
+        __atomic_store_n(ic, (uint64_t)target << 32 | (uint64_t)RECOMP_IC_SHIM << 24, __ATOMIC_RELAXED);
+        recomp_shim_call(c, target);
+        return;
+    }
+    uint32_t table = 0;
+    const RecompModule *m = recomp_ic_tables[0];
+    int32_t i = m ? recomp_index_of(target) : -1;
+    if (i < 0 && !module_entry(target, &m, &table, &i))
+        i = -1;
+    if (i < 0) {
+        recomp_jump(c, target);
+        return;
+    }
+    if ((uint32_t)i < (1u << 24) && table < RECOMP_IC_SHIM && recomp_ic_tables[table])
+        __atomic_store_n(ic, (uint64_t)target << 32 | (uint64_t)table << 24 | (uint32_t)i, __ATOMIC_RELAXED);
+#ifdef RECOMP_NO_HOOKS
+    m->base_ptrs[i](c);
+#else
+    if (__atomic_load_n(m->hooked[i], __ATOMIC_ACQUIRE))
+        m->hook_ptrs[i](c, (uint32_t)i);
+    else
+        m->base_ptrs[i](c);
+#endif
+}
+
 namespace {
 // Puts every traced slot back as it was before the trace took it, newest first.
 void trace_remove_all() {
