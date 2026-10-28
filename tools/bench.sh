@@ -53,19 +53,23 @@ elif [ "$scenario" = walka ]; then
   done
 fi
 # Scenes: the commands at a fixed time from the start, the frames at the same times in the script, so both run on
-# one plan; the world is in by T0 (about 60 s on the player's setup) and each scene takes 25 s.
+# one plan; the world is in by T0 (about 60 s on the player's setup) and each scene takes 25 s. Chosen in session 22
+# from 15 candidates: night with rain and torches (Geldern, Faring), close textures (Montera), the king's hall with guards and a fire
+# (Rhobar), a valley with waterfalls (Silden), grass, rock and a banded sky (Lester).
 T0=100
-SCENES=${SCENES:-'noc;goto Ardea;game.SetTime(23,0)
-cienie;goto Ardea;game.SetTime(17,30)
-dzien;goto Ardea;game.SetTime(12,0)
-walka;goto Grok;game.SetTime(12,0)
-woda;goto Vatras;game.SetTime(12,0)'}
+SCENES=${SCENES:-'geldern_noc;goto Geldern;game.SetTime(22,0)
+faring_noc;goto Faring;game.SetTime(22,0)
+montera;goto Montera;game.SetTime(15,0)
+rhobar_noc;goto Rhobar;game.SetTime(23,0)
+silden;goto Silden;game.SetTime(15,0)
+lester;goto Lester;game.SetTime(15,0)'}
 if [ "$scenario" = sceny ]; then
   n=$(printf '%s\n' "$SCENES" | grep -c .)
   secs=$((T0 + 25 * n + 5))
   steps="wait $((T0 * 1000))\n"
   for name in $(printf '%s\n' "$SCENES" | cut -d';' -f1); do
-    steps="${steps}wait 18000\ndump ${name}_a\nwait 1000\ndump ${name}_b\nwait 6000\n"
+    # Two seconds after the goto the player steps back (S, 1.5 s), so the camera is not inside the entity.
+    steps="${steps}wait 2000\nkey S down\nwait 1500\nkey S up\nwait 14500\ndump ${name}_a\nwait 1000\ndump ${name}_b\nwait 6000\n"
   done
 fi
 printf '%b' "$steps" > "$out/bench.smoke"

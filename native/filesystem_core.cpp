@@ -7,6 +7,9 @@
 extern "C" int g3fs_name_fits(const char *pattern, const char *name); // filesystem_match.c
 
 #include <algorithm>
+#include <climits>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -633,6 +636,31 @@ bool FileSystem::unmount_directory(const std::string &path) { // 10da1ab0
     return true;
 }
 
+// The archive's copy with every zlib entry unpacked (tools/g3stored.py), when there is one for this very file: the
+// same tree, so a read of an entry there is a read, not a read and an inflate (session 22: 30-57 ms for a World
+// Texture Mix texture inside the frame). The key is FNV-1a 64 of the real path, the size and the modification time in
+// nanoseconds, each with a NUL after it, as g3stored.py computes it; a changed archive has another key.
+static std::string stored_copy(const std::string &host_path) {
+    char real[PATH_MAX];
+    struct stat st;
+    const char *home = getenv("HOME");
+    if (!home || !realpath(host_path.c_str(), real) || stat(real, &st) != 0)
+        return std::string();
+    uint64_t h = 0xcbf29ce484222325ull;
+    const std::string parts[3] = {real, std::to_string((long long)st.st_size),
+                                  std::to_string((long long)st.st_mtimespec.tv_sec * 1000000000ll +
+                                                 st.st_mtimespec.tv_nsec)};
+    for (const std::string &part : parts) {
+        for (unsigned char b : part)
+            h = (h ^ b) * 0x100000001b3ull;
+        h *= 0x100000001b3ull; // the NUL
+    }
+    char name[96];
+    snprintf(name, sizeof name, "/Library/Caches/Gothic3Recomp/stored/%016llx.g3s", (unsigned long long)h);
+    const std::string copy = std::string(home) + name;
+    return access(copy.c_str(), R_OK) == 0 ? copy : std::string();
+}
+
 bool FileSystem::mount_pack(const std::string &path, const std::string &pack) { // 10da1b70, 10da63d0
     Volume *v = volume_of(path);
     Folder *f = v ? exact(v->root.get(), path) : nullptr;
@@ -642,7 +670,22 @@ bool FileSystem::mount_pack(const std::string &path, const std::string &pack) { 
     p->path = pack;
     p->host_path = disk_.host_path(pack);
     std::string error;
-    if (!pack_load(p.get(), &error))
+    const std::string copy = stored_copy(p->host_path);
+    if (!copy.empty()) {
+        const std::string original = p->host_path;
+        p->host_path = copy;
+        if (pack_load(p.get(), &error)) {
+            fprintf(stderr, "[g3fs] %s read from its unpacked copy %s\n", pack.c_str(), copy.c_str());
+        } else {
+            fprintf(stderr, "[g3fs] the unpacked copy %s of %s does not load (%s), the archive is read\n", copy.c_str(),
+                    pack.c_str(), error.c_str());
+            if (p->fd >= 0)
+                close(p->fd);
+            p->fd = -1;
+            p->host_path = original;
+        }
+    }
+    if (p->fd < 0 && !pack_load(p.get(), &error))
         return false;
     f->packs.push_back(std::move(p));
     return true;
