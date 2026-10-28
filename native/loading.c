@@ -12,8 +12,8 @@
  * (10270e40) passes the count to SetThreadNumber, the pool's thread (eCThreadPool::g_ThreadFunc 10454110) takes the
  * queued loads, and the frame draws without the texture until it is in, as the game did before the patch. The
  * thread is a guest thread under the baton like any other, so guest code still never runs on two cores at once;
- * what runs beside the game thread is the inflate of the entry (archive.c), which lends the baton for its host-only
- * work. Group "load"; off, the counts stay the patch's.
+ * what runs beside the game thread is the read and inflate of an entry of 1 MB or more (native/filesystem.cpp), which
+ * lends the baton for its host-only work. Group "load"; off, the counts stay the patch's.
  *
  * What the renderer draws with is a different path. The texture component's bind (FUN_104a1260, a shader component's
  * vtable +8 under ExecutePass) finds the image not loaded (state other than 6), sets its behaviour to 1 and caches it
