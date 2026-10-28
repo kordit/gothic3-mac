@@ -16,6 +16,7 @@
 #endif
 #include <map>
 #include <mutex>
+#include <vector>
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -639,10 +640,22 @@ uint32_t heap_size(uint32_t addr) {
     return it->second.req;
 }
 
+// recomp_heap_defer: a thread's frees queued instead of made, until recomp_heap_defer_flush. Gothic 3's stage 5 runs
+// the logic beside the render; a block the logic frees could be handed out again while the render still reads the
+// object that was in it (28.10: the render list's sort read a garbage pointer out of such an object).
+thread_local bool t_heap_defer = false;
+std::vector<uint32_t> *g_heap_deferred = nullptr;
+
 bool heap_free(uint32_t addr) {
     std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks || !addr)
         return false;
+    if (t_heap_defer) {
+        if (!g_heap_deferred)
+            g_heap_deferred = new std::vector<uint32_t>();
+        g_heap_deferred->push_back(addr);
+        return true;
+    }
     auto it = g_blocks->find(addr);
     if (it == g_blocks->end() || !it->second.used) {
         LOGW("heap_free: %08x is not a live allocation", addr);
@@ -803,6 +816,24 @@ uint32_t heap_alloc_guarded(uint32_t size, bool zero, uint32_t guard, const char
         g_guards = new std::map<uint32_t, GuardRec>();
     (*g_guards)[user] = GuardRec{size, guard, what, tag, 0};
     return user;
+}
+
+extern "C" void recomp_heap_defer(bool on) {
+    t_heap_defer = on;
+}
+
+extern "C" size_t recomp_heap_defer_flush() {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
+    if (!g_heap_deferred || g_heap_deferred->empty())
+        return 0;
+    std::vector<uint32_t> q;
+    q.swap(*g_heap_deferred);
+    const bool was = t_heap_defer;
+    t_heap_defer = false;
+    for (uint32_t a : q)
+        heap_free(a);
+    t_heap_defer = was;
+    return q.size();
 }
 
 bool heap_free_guarded(uint32_t addr) {

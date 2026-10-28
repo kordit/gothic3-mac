@@ -30,6 +30,10 @@ inline bool win32_heap_zeroes(uint32_t size, bool zero) {
     return zero || size >= WIN32_HEAP_VIRTUAL_THRESHOLD;
 }
 bool heap_free(uint32_t addr);
+// The calling thread's heap_free calls are queued instead of made while on (Gothic 3 stage 5: the logic's frees
+// while the render runs); recomp_heap_defer_flush makes the queued frees, from any thread, and returns how many.
+extern "C" void recomp_heap_defer(bool on);
+extern "C" size_t recomp_heap_defer_flush();
 // Requested (not rounded) size of a live block, or 0xffffffff if `addr` is not
 // the start of a live allocation.
 uint32_t heap_size(uint32_t addr);
