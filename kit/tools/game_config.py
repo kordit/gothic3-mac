@@ -251,6 +251,12 @@ def load(game_dir):
         raise ValueError("%s: [game] present_async must be an integer 0-3" % source)
     if not isinstance(game.setdefault("query_nosync", False), bool):
         raise ValueError("%s: [game] query_nosync must be true or false" % source)
+    # [game] render_scale_max: the most the D3D9 render targets grow to fill the drawable's height (1.0-8.0, default
+    # 8.0: the drawable decides). Gothic 3 session 16: 1.0, the player's Retina window had made every target 1.75x
+    # each way and the frame GPU-bound. RECOMP_D3D9_SCALE_MAX still wins; RECOMP_D3D9_SCALE fixes the scale outright.
+    smax = game.setdefault("render_scale_max", 8.0)
+    if isinstance(smax, bool) or not isinstance(smax, (int, float)) or not 1.0 <= smax <= 8.0:
+        raise ValueError("%s: [game] render_scale_max must be a number 1.0-8.0" % source)
     data_dir_name(game.setdefault("data_dir_name", game["app_name"]))
     # NFSU1 run 8: the guest address of the game's own frame-time cap (a float, seconds per frame, e.g. 1/60). The kit
     # writes 1/limit there when the Frame limit setting is 40/60/120 so the game itself runs at that rate; 0 = none.

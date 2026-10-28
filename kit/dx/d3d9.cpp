@@ -34,6 +34,7 @@
 #include "d3d9_volume.h"
 #include "host_d9.h"
 #include "d3d9_msaa.h"
+#include "../host/gpu_time.h"
 #include <array>
 #include <unordered_map>
 #include <map>
@@ -263,7 +264,13 @@ static void phases_frame(char *out, size_t cap, bool want) {
         g_phases[i].frame_ns = 0;
     }
 }
+// Session 16 part 2: with the GPU time of the renderer's finished command buffers (gpu_time.h), so a window run
+// without the overlay says whether the GPU or the game thread sets the frame.
 static void phases_report(uint64_t frames, double s) {
+    static uint64_t gpu_us0 = g_host_game_gpu_us.load(std::memory_order_relaxed);
+    const uint64_t gpu_us = g_host_game_gpu_us.load(std::memory_order_relaxed);
+    const double gpu_ms = frames ? (gpu_us - gpu_us0) / 1000.0 / frames : 0.0;
+    gpu_us0 = gpu_us;
     if (!g_phase_count || !frames)
         return;
     char line[512];
@@ -273,6 +280,8 @@ static void phases_report(uint64_t frames, double s) {
                       g_phases[i].ns / 1e6 / frames);
         g_phases[i].ns = 0;
     }
+    if (n < (int)sizeof line)
+        snprintf(line + n, sizeof line - n, ", gpu %.2f ms", gpu_ms);
     LOGW("%s", line);
 }
 // The time inside a renderer wait, as a phase (frame times on only: the clock reads cost nothing otherwise).
@@ -479,6 +488,8 @@ static const uint16_t kAdapterModes[][2] = {
     // NFSU1 run 8: 16:10, 4K and a 16" MacBook Pro's own panel, for games that list the adapter's sizes (UG1 does not
     // look past its own five; its resolution comes from core.nfsu1).
     {1680, 1050}, {1920, 1200}, {2560, 1600}, {3456, 2234}, {3840, 2160},
+    // Gothic 3 session 16 part 2: the smaller 16:10 sizes of a MacBook's panel, for a player whose GPU is short.
+    {1280, 800},  {1440, 900},
 };
 // game.toml [game] adapter modes: "desktop" (default, NFSMW's released behaviour) lists one 1280x960 mode, "list"
 // the table above.

@@ -31,6 +31,7 @@
 #include "sharpen_msl.h"   // R3 run 22 (TEST): the sharpen on the MetalFX temporal output
 #include "../../present.h"
 #include "../../gpu_time.h"
+#include "game_config.h"
 #include "../d3d9_backend.h"
 #include "../d3d9_common.h"
 #include "../hdr_convert.h"   // PLAN_R2 item 10 real HDR
@@ -65,6 +66,7 @@
 #include <pthread.h>
 #include <algorithm>
 #include <map>
+#include <tuple>
 #include <set>
 #include <memory>
 #include <mutex>
@@ -1775,6 +1777,7 @@ class Renderer final : public D9Backend {
         end_pass();
         begin_frame();
         id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
+        ++gp_blits_;
         [blit copyFromTexture:t.texture
                          sourceSlice:face
                          sourceLevel:level
@@ -4839,6 +4842,7 @@ class Renderer final : public D9Backend {
         hdr_latch(backbuffer);   // PLAN_R2 item 10: the next frame's format
         if (presents_ % 300 == 1)
             report();
+        gp_report();
         follow_drawable();
         last_presented_ = backbuffer;
         last_w_ = w;
@@ -5270,6 +5274,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         }
         begin_frame();
         id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
+        ++gp_blits_;
         [blit copyFromTexture:t.texture
                   sourceSlice:0
                   sourceLevel:0
@@ -5319,6 +5324,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             return;
         begin_frame();
         id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
+        ++gp_blits_;
         [blit copyFromTexture:t.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
                    sourceSize:MTLSizeMake(w, h, 1) toTexture:copy destinationSlice:0 destinationLevel:0
             destinationOrigin:MTLOriginMake(0, 0, 0)];
@@ -5363,7 +5369,22 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         if (const char *min = recomp_env("D3D9_MIN_ROWS"))
             rows = std::max(rows, atoi(min));
         float s = std::floor(8.0f * rows / base_rows_ + 0.5f) / 8.0f;
-        return std::max(1.0f, std::min(8.0f, s));
+        return std::max(1.0f, std::min(scale_max(), s));
+    }
+    // Gothic 3 session 16 part 2: the most the targets follow the drawable ([game] render_scale_max,
+    // RECOMP_D3D9_SCALE_MAX). The player's 3456x2168 drawable over the game's 1920x1200 made every target 1.75x
+    // each way, the shadow map 2464x2464 and the bloom chain with them: the GPU's stages 8.5 -> 13.3 ms a frame in
+    // the same cave. 1 renders at the game's own size and the presenter scales the frame to the window.
+    static float scale_max() {
+#ifndef RECOMP_D3D9_SCALE_MAX_DEFAULT
+#define RECOMP_D3D9_SCALE_MAX_DEFAULT 8.0f   // game_config.h from before the key existed
+#endif
+        static const float m = [] {
+            const char *e = recomp_env("D3D9_SCALE_MAX");
+            const float v = e ? (float)atof(e) : (float)RECOMP_D3D9_SCALE_MAX_DEFAULT;
+            return std::max(1.0f, std::min(8.0f, v));
+        }();
+        return m;
     }
     // Follow the drawable: once a different scale has been wanted for a
     // quarter of a second's worth of frames, every scaled target is made
@@ -5804,6 +5825,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         if (!dst)
             return false;
         id<MTLBlitCommandEncoder> be = [cmd_ blitCommandEncoder];
+        ++gp_blits_;
         [be copyFromTexture:src toTexture:dst];
         [be endEncoding];
         return true;
@@ -6000,6 +6022,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
                 }
                 if (synth_keep_) {
                     id<MTLBlitCommandEncoder> be = [cmd_ blitCommandEncoder];
+                    ++gp_blits_;
                     [be copyFromTexture:tmp_.out toTexture:synth_keep_];
                     [be endEncoding];
                     synth_used_ = serial_;
@@ -6417,6 +6440,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         end_pass();
         begin_frame();
         id<MTLBlitCommandEncoder> be = [cmd_ blitCommandEncoder];
+        ++gp_blits_;
         [be copyFromTexture:scene sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0)
                  sourceSize:MTLSizeMake(w, h, 1) toTexture:ssr_.src destinationSlice:0 destinationLevel:0
           destinationOrigin:MTLOriginMake(0, 0, 0)];
@@ -7055,6 +7079,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         [ce endEncoding];
         if (colgate) {   // this frame's scene colour for the next frame's gate (before the debug view draws over it)
             id<MTLBlitCommandEncoder> be = [cmd_ blitCommandEncoder];
+            ++gp_blits_;
             [be copyFromTexture:bt->texture toTexture:fnd_.prevc];
             [be endEncoding];
             fnd_.prevc_valid = true;
@@ -7262,6 +7287,11 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     }
     void fb_prepare(const HostD9Draw &d) {
         fb_sampled_ = 0;
+        // RECOMP_D3D9_FB_COPY=0 (a measurement, session 16 part 2): no copies, the draw samples the placeholder as
+        // before cfc51ee, so a frame's cost without the pass breaks the copies make can be read off.
+        static const bool fb_off = [] { const char *e = recomp_env("D3D9_FB_COPY"); return e && *e == '0'; }();
+        if (fb_off)
+            return;
         id<MTLTexture> targets[4] = {};
         bool any_target = false;
         for (int i = 0; i < 4; ++i)
@@ -7317,6 +7347,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             end_pass();   // the target's contents so far reach the texture
             begin_frame();
             id<MTLBlitCommandEncoder> blit = [cmd_ blitCommandEncoder];
+            ++gp_blits_;
             [blit copyFromTexture:src toTexture:sh.tex];
             [blit endEncoding];
             sh.valid = true;
@@ -7444,6 +7475,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             pass_vis_ = true;
         }
         surf_attach(rp, t);   // Run 15 Wave B WB1b: colour 4-6 on the in-window scene passes
+        gp_attach(rp, t.color[0].level);
         enc_ = [cmd_ renderCommandEncoderWithDescriptor:rp];
         surf_.enc = surf_.want ? enc_ : nil;   // Run 15 Wave B WB1b
         if (gpu_labels_ && enc_)   // run 20 TEST: the pass's targets (game surface ids) in gpudebug
@@ -7475,7 +7507,223 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         pass_scale_ = textures_[t.color[0].id].scale;
         return enc_ != nil;
     }
+    // Gothic 3 session 16 (28.10: the player's GPU at 29.8 ms a frame in a cave, the CPU at 20.8 ms):
+    // RECOMP_D3D9_GPU_PASSES=1 times every render pass on the GPU with timestamp counters at its stage boundaries
+    // (Apple GPUs sample there, not between draws): vertex and fragment time by kind of pass (its colour target's
+    // size, format and samples, whether it has depth), passes and draws a frame, every 10 s. Each command buffer
+    // takes a sample buffer of 256 passes from a pool and gives it back when it has finished.
+    struct GpuPassKey {
+        uint32_t w, h, fmt, samples, depth;
+        bool operator<(const GpuPassKey &o) const {
+            return std::tie(w, h, fmt, samples, depth) < std::tie(o.w, o.h, o.fmt, o.samples, o.depth);
+        }
+    };
+    struct GpuPassAcc {
+        uint64_t vertex_ns = 0, fragment_ns = 0, passes = 0, draws = 0;
+    };
+    struct GpuPassSlot {
+        id<MTLCounterSampleBuffer> buf = nil;
+        std::vector<std::pair<GpuPassKey, uint64_t>> passes; // the key and the draws of each sampled pass
+    };
+    static constexpr uint32_t kGpuPassMax = 256;
+    bool gp_on_ = [] { const char *e = getenv("RECOMP_D3D9_GPU_PASSES"); return e && *e == '1'; }();
+    bool gp_ready_ = false;
+    id<MTLCounterSet> gp_set_ = nil;
+    std::mutex gp_mu_;
+    std::vector<std::unique_ptr<GpuPassSlot>> gp_all_;
+    std::vector<GpuPassSlot *> gp_free_;
+    GpuPassSlot *gp_cur_ = nullptr;   // the open command buffer's
+    int gp_pass_ = -1;                // the open pass's index in it, -1 when not sampled
+    uint64_t gp_pass_draws_ = 0;
+    std::map<GpuPassKey, GpuPassAcc> gp_acc_;
+    uint64_t gp_unsampled_ = 0, gp_blits_ = 0;
+    double gp_t0_ = 0, gp_cal_media_ = 0;
+    uint64_t gp_frames0_ = 0, gp_cb_us0_ = 0;
+    MTLTimestamp gp_cal_gpu_ = 0;
+    double gp_ns_per_tick_ = 1.0;
+    bool gp_setup() {
+        if (gp_ready_)
+            return gp_set_ != nil;
+        gp_ready_ = true;
+        if (![mtl_ supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]) {
+            fprintf(stderr, "d3d9 metal: gpu passes: no counter sampling at stage boundaries on this GPU\n");
+            return false;
+        }
+        for (id<MTLCounterSet> s in mtl_.counterSets)
+            if ([s.name isEqualToString:MTLCommonCounterSetTimestamp])
+                gp_set_ = s;
+        if (!gp_set_) {
+            fprintf(stderr, "d3d9 metal: gpu passes: no timestamp counter set\n");
+            return false;
+        }
+        MTLTimestamp cpu = 0;
+        [mtl_ sampleTimestamps:&cpu gpuTimestamp:&gp_cal_gpu_];
+        gp_cal_media_ = gp_t0_ = CACurrentMediaTime();
+        gp_frames0_ = presents_;
+        gp_cb_us0_ = g_host_game_gpu_us.load(std::memory_order_relaxed);
+        fprintf(stderr, "d3d9 metal: gpu passes timed at stage boundaries\n");
+        return true;
+    }
+    // begin_frame: the new command buffer's sample buffer, read back when it completes.
+    void gp_begin_cmd() {
+        gp_cur_ = nullptr;
+        if (!gp_on_ || !gp_setup())
+            return;
+        {
+            std::lock_guard<std::mutex> lk(gp_mu_);
+            if (!gp_free_.empty()) {
+                gp_cur_ = gp_free_.back();
+                gp_free_.pop_back();
+            }
+        }
+        if (!gp_cur_) {
+            MTLCounterSampleBufferDescriptor *d = [MTLCounterSampleBufferDescriptor new];
+            d.counterSet = gp_set_;
+            d.storageMode = MTLStorageModeShared;
+            d.sampleCount = kGpuPassMax * 4;
+            NSError *err = nil;
+            id<MTLCounterSampleBuffer> b = [mtl_ newCounterSampleBufferWithDescriptor:d error:&err];
+            if (!b) {
+                fprintf(stderr, "d3d9 metal: gpu passes: no sample buffer (%s), off\n",
+                        err ? err.localizedDescription.UTF8String : "?");
+                gp_on_ = false;
+                return;
+            }
+            gp_all_.push_back(std::make_unique<GpuPassSlot>());
+            gp_cur_ = gp_all_.back().get();
+            gp_cur_->buf = b;
+        }
+        gp_cur_->passes.clear();
+        GpuPassSlot *slot = gp_cur_;
+        [cmd_ addCompletedHandler:^(id<MTLCommandBuffer>) {
+          gp_complete(slot);
+        }];
+    }
+    void gp_complete(GpuPassSlot *slot) {
+        const size_t n = slot->passes.size();
+        NSData *data = n ? [slot->buf resolveCounterRange:NSMakeRange(0, n * 4)] : nil;
+        std::lock_guard<std::mutex> lk(gp_mu_);
+        if (data && data.length >= n * 4 * sizeof(MTLCounterResultTimestamp)) {
+            const MTLCounterResultTimestamp *ts = (const MTLCounterResultTimestamp *)data.bytes;
+            const double k = gp_ns_per_tick_;
+            auto span = [&](uint64_t a, uint64_t b) -> uint64_t {
+                return (a && b && b > a && a != MTLCounterErrorValue && b != MTLCounterErrorValue)
+                           ? (uint64_t)((b - a) * k) : 0;
+            };
+            for (size_t i = 0; i < n; ++i) {
+                const uint64_t v0 = ts[i * 4].timestamp, v1 = ts[i * 4 + 1].timestamp, f0 = ts[i * 4 + 2].timestamp,
+                               f1 = ts[i * 4 + 3].timestamp;
+                GpuPassAcc &a = gp_acc_[slot->passes[i].first];
+                a.vertex_ns += span(v0, v1);
+                a.fragment_ns += span(f0, f1);
+                ++a.passes;
+                a.draws += slot->passes[i].second;
+            }
+        }
+        gp_free_.push_back(slot);
+    }
+    // begin_pass: the pass samples its four stage boundaries into the command buffer's buffer.
+    void gp_attach(MTLRenderPassDescriptor *rp, uint32_t lv) {
+        gp_pass_ = -1;
+        if (!gp_cur_)
+            return;
+        if (gp_cur_->passes.size() >= kGpuPassMax) {
+            ++gp_unsampled_;
+            return;
+        }
+        gp_pass_ = (int)gp_cur_->passes.size();
+        MTLRenderPassSampleBufferAttachmentDescriptor *a = rp.sampleBufferAttachments[0];
+        a.sampleBuffer = gp_cur_->buf;
+        a.startOfVertexSampleIndex = gp_pass_ * 4;
+        a.endOfVertexSampleIndex = gp_pass_ * 4 + 1;
+        a.startOfFragmentSampleIndex = gp_pass_ * 4 + 2;
+        a.endOfFragmentSampleIndex = gp_pass_ * 4 + 3;
+        GpuPassKey key{};
+        if (id<MTLTexture> c = pass_color_[0]) {
+            key.w = (uint32_t)std::max<NSUInteger>(c.width >> lv, 1);
+            key.h = (uint32_t)std::max<NSUInteger>(c.height >> lv, 1);
+            key.fmt = (uint32_t)c.pixelFormat;
+        }
+        key.samples = pass_samples_;
+        key.depth = rp.depthAttachment.texture != nil;
+        gp_cur_->passes.emplace_back(key, 0);
+        gp_pass_draws_ = draws_;
+    }
+    void gp_end_pass() {
+        if (gp_pass_ >= 0 && gp_cur_ && gp_pass_ < (int)gp_cur_->passes.size())
+            gp_cur_->passes[gp_pass_].second = draws_ - gp_pass_draws_;
+        gp_pass_ = -1;
+    }
+    static const char *gp_format(uint32_t f) {
+        switch ((MTLPixelFormat)f) {
+        case MTLPixelFormatBGRA8Unorm: return "BGRA8";
+        case MTLPixelFormatRGBA8Unorm: return "RGBA8";
+        case MTLPixelFormatRGBA16Float: return "RGBA16F";
+        case MTLPixelFormatRG16Float: return "RG16F";
+        case MTLPixelFormatR16Float: return "R16F";
+        case MTLPixelFormatR32Float: return "R32F";
+        case MTLPixelFormatRG32Float: return "RG32F";
+        case MTLPixelFormatRGBA32Float: return "RGBA32F";
+        case MTLPixelFormatB5G6R5Unorm: return "B5G6R5";
+        case MTLPixelFormatRGB10A2Unorm: return "RGB10A2";
+        default: return nullptr;
+        }
+    }
+    // present: every 10 s, the passes' GPU time per frame by kind, the slowest first.
+    void gp_report() {
+        if (!gp_on_ || !gp_set_)
+            return;
+        const double now = CACurrentMediaTime();
+        if (now - gp_t0_ < 10.0)
+            return;
+        MTLTimestamp cpu = 0, gpu = 0;
+        [mtl_ sampleTimestamps:&cpu gpuTimestamp:&gpu];
+        std::map<GpuPassKey, GpuPassAcc> acc;
+        uint64_t unsampled, blits;
+        {
+            std::lock_guard<std::mutex> lk(gp_mu_);
+            if (gpu > gp_cal_gpu_ && now > gp_cal_media_)
+                gp_ns_per_tick_ = (now - gp_cal_media_) * 1e9 / (double)(gpu - gp_cal_gpu_);
+            acc.swap(gp_acc_);
+            unsampled = gp_unsampled_, blits = gp_blits_;
+            gp_unsampled_ = gp_blits_ = 0;
+        }
+        gp_cal_media_ = now, gp_cal_gpu_ = gpu;
+        const uint64_t frames = presents_ > gp_frames0_ ? presents_ - gp_frames0_ : 1;
+        const uint64_t cb_us = g_host_game_gpu_us.load(std::memory_order_relaxed);
+        std::vector<std::pair<GpuPassKey, GpuPassAcc>> v(acc.begin(), acc.end());
+        // A tiled GPU runs one pass's vertex stage beside an earlier pass's fragment stage, so a pass's start-to-end
+        // span overlaps others; its two stages' times add up to what the GPU spent on it.
+        auto busy = [](const GpuPassAcc &a) { return a.vertex_ns + a.fragment_ns; };
+        std::sort(v.begin(), v.end(), [&](auto &a, auto &b) { return busy(a.second) > busy(b.second); });
+        uint64_t whole = 0, passes = 0;
+        for (auto &e : v)
+            whole += busy(e.second), passes += e.second.passes;
+        fprintf(stderr,
+                "d3d9 metal: gpu, last %.1f s: command buffers %.2f ms per frame, pass stages %.2f ms per frame "
+                "(%.1f passes, %.1f unsampled, %.1f blits per frame; ns per tick %.3f)\n",
+                now - gp_t0_, (cb_us - gp_cb_us0_) / 1000.0 / frames, whole / 1e6 / frames, (double)passes / frames,
+                (double)unsampled / frames, (double)blits / frames, gp_ns_per_tick_);
+        for (size_t i = 0; i < v.size() && i < 14; ++i) {
+            const GpuPassKey &k = v[i].first;
+            const GpuPassAcc &a = v[i].second;
+            const char *fn = gp_format(k.fmt);
+            char fb[16];
+            if (!fn)
+                snprintf(fb, sizeof fb, "fmt%u", k.fmt), fn = fb;
+            fprintf(stderr,
+                    "d3d9 metal: gpu pass %ux%u %s x%u%s: %.2f ms per frame (vertex %.2f, fragment %.2f), "
+                    "%.1f passes, %.0f draws per frame\n",
+                    k.w, k.h, fn, k.samples, k.depth ? " +depth" : "", busy(a) / 1e6 / frames,
+                    a.vertex_ns / 1e6 / frames, a.fragment_ns / 1e6 / frames, (double)a.passes / frames,
+                    (double)a.draws / frames);
+        }
+        gp_t0_ = now;
+        gp_frames0_ = presents_;
+        gp_cb_us0_ = cb_us;
+    }
     void end_pass() {
+        gp_end_pass();
         if (enc_) {
             [enc_ endEncoding];
             enc_ = nil;
@@ -7641,6 +7889,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
           done->store(serial);
           dispatch_semaphore_signal(sem);
         }];
+        gp_begin_cmd();
     }
     void flush() {
         if (!cmd_)
