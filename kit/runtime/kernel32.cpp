@@ -225,6 +225,8 @@ const uint32_t MAXIMUM_WAIT_OBJECTS_ = 64;
 struct GuestThread;
 GuestThread *cur_thread();
 bool guest_yield();
+// kit/dx/d3d9.cpp; weak, so a runtime without the D3D9 layer (runtime_tests) links and skips it.
+extern "C" __attribute__((weak)) void recomp_phase_add(const char *name, uint64_t ns);
 uint32_t cur_tls_base();
 uint32_t cur_thread_id();
 // Blocking primitives, implemented on the scheduler further down. Every one of
@@ -3145,6 +3147,14 @@ uint32_t guest_block(const char *why) {
         g_main_sleep_deadline = plain_sleep ? sleep_until : 0.0;
     sched_run_others_locked(me->index, why);
     uint32_t r = me->wait_result;
+    // The main thread's waits as frame phases (the "phases" and "slow frame" lines, also in the player's
+    // logs/game.log): 28.10, the player's fights had frames whose logic took 40-77 ms on 16-30 ms of game-thread CPU.
+    const char *wait_phase = nullptr;
+    uint64_t wait_ns = 0;
+    if (me->is_main) {
+        wait_phase = plain_sleep ? "wait sleep" : !strcmp(why, "critical section") ? "wait cs" : "wait other";
+        wait_ns = sched_seconds_ns(sched_now() - block_start);
+    }
     if (me->is_main) {
         g_main_sleep_deadline = 0.0;
         const double back = sched_now();
@@ -3203,6 +3213,8 @@ uint32_t guest_block(const char *why) {
         main_starve_max(late);
     }
     g_sched_m.unlock();
+    if (wait_phase && recomp_phase_add)
+        recomp_phase_add(wait_phase, wait_ns);
     t_run_cpu_from = os_thread_cpu_ns();
     if (g_exit_requested)
         thread_finish_exit_process();
@@ -3230,6 +3242,7 @@ bool guest_yield() {
     sched_expire_locked();
     size_t next = sched_next_runnable_locked(me->index);
     bool moved = next != NO_THREAD && next != me->index;
+    uint64_t yield_ns = 0;
     if (moved) {
         const double away = me->last_yield;
         g_baton = next;
@@ -3241,9 +3254,12 @@ bool guest_yield() {
             const uint64_t ns = sched_seconds_ns(sched_now() - away);
             g_main_yield_ns.fetch_add(ns, std::memory_order_relaxed);
             main_starve_max(ns);
+            yield_ns = ns;
         }
     }
     g_sched_m.unlock();
+    if (yield_ns && recomp_phase_add)
+        recomp_phase_add("wait yield", yield_ns);
     if (moved && g_exit_requested)
         thread_finish_exit_process();
     return moved;

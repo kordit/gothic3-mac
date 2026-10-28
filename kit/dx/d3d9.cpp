@@ -240,7 +240,7 @@ struct Phase {
     uint64_t ns;
     uint64_t frame_ns; // since the last present, for a slow frame's own line
 };
-Phase g_phases[8];
+Phase g_phases[12];
 int g_phase_count = 0;
 } // namespace
 // Gothic 3 stage 5: the logic's phase comes from a thread of its own while the render adds its waits.
@@ -253,7 +253,7 @@ extern "C" void recomp_phase_add(const char *name, uint64_t ns) {
             g_phases[i].frame_ns += ns;
             return;
         }
-    if (g_phase_count < 8)
+    if (g_phase_count < 12)
         g_phases[g_phase_count++] = {name, ns, ns};
 }
 // A slow frame's phases, as " (name X ms, ...)", and every phase's frame share cleared for the next one. A phase
