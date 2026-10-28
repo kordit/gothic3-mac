@@ -308,6 +308,12 @@ void g3n_10276490(X86 *c);
 #define FN_10a5f180 g3n_10a5f180 /* Game gCPlayerMemory_PS::CalcMissingValue (20) */
 void g3n_10a5f180(X86 *c);
 
+/* Extended Frying (mods.c, docs/mods/dll-extendedfrying.md): Immersive World's dependency */
+#define FN_109b2280 g3n_109b2280 /* Game gCHUDListCtrlInvTransforms slot 67: the frying page's list */
+void g3n_109b2280(X86 *c);
+#define FN_1101a740 g3n_1101a740 /* Script_Game OnPlayerFryStack */
+void g3n_1101a740(X86 *c);
+
 /* phases (phases.c): the render half of a frame, timed for the kit's per-frame phases (logic: mods.c, 10276490) */
 #define FN_10276100 g3n_10276100 /* Engine eCApplication::DoRender */
 void g3n_10276100(X86 *c);

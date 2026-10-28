@@ -27,6 +27,13 @@
  * function starts here and inside functions as game.toml native_sites (native_site_<at>), with
  * G3Fixes.ini as the player has it.
  *
+ * Extended Frying (docs/mods/dll-extendedfrying.md), while active-mods.json lists it: the frying
+ * page lists and fries any item for which a template <name with _Raw as _Fried>, <name>_Fried or
+ * <name>_Fried_Pan exists (Immersive World's deer, pig, camel, chicken, sheep and fish), not only
+ * It_Meat_Raw and It_Meatbug_Raw. The mod's three hooks and its NOP patch sit inside two small
+ * functions, so both are replaced whole from their start: the list filter (Game 109b2280, slot 67
+ * of gCHUDListCtrlInvTransforms) and OnPlayerFryStack (Script_Game 1101a740).
+ *
  * G3LOC=<id> in the trace control file (RECOMP_TRACE_CONTROL) prints the string table's entry
  * <id> in the current language as "g3loc<" lines: whether strings.mod is what the game reads. */
 #include "chunk.h"
@@ -56,6 +63,8 @@ void fn_102c6bd0(X86 *c); /* Engine eCConsole::OnExecute */
 void fn_10dd4680(X86 *c); /* GFC CFFGFCWnd window thunk */
 void fn_10276490(X86 *c); /* Engine eCApplication::Process */
 void fn_10a5f180(X86 *c); /* Game gCPlayerMemory_PS::CalcMissingValue */
+void fn_109b2280(X86 *c); /* Game gCHUDListCtrlInvTransforms slot 67, the transform list's filter */
+void fn_1101a740(X86 *c); /* Script_Game OnPlayerFryStack */
 
 /* SharedBase */
 #define STR_CTOR 0x100029c0u       /* bCString::bCString(char const *) */
@@ -82,7 +91,7 @@ void fn_10a5f180(X86 *c); /* Game gCPlayerMemory_PS::CalcMissingValue */
 #define RET_SAY 0x10ff9478u
 #define RET_SAY_SOUND 0x1106a447u
 
-enum { MOD_FONT_SCALE = 1, MOD_SUBTITLES = 2, MOD_G3FIXES = 4 };
+enum { MOD_FONT_SCALE = 1, MOD_SUBTITLES = 2, MOD_G3FIXES = 4, MOD_EXTENDED_FRYING = 8 };
 
 static int mods_read;
 static uint32_t mods_on;
@@ -156,12 +165,16 @@ static uint32_t mods(void) {
         char *json = read_file(path, 1 << 20);
         if (json && strstr(json, "\"G3Fixes\""))
             mods_on |= MOD_G3FIXES;
+        /* Extended Frying too: a rule of the game, and Immersive World's dependency. */
+        if (json && strstr(json, "\"Extended Frying\""))
+            mods_on |= MOD_EXTENDED_FRYING;
         free(json);
     }
     if (mods_on & MOD_SUBTITLES)
         sub_mode = read_display_time(profile);
-    fprintf(stderr, "g3mods: native mods from %s: font scale %s, subtitles %s (display time %d)\n", path,
-            (mods_on & MOD_FONT_SCALE) ? "on" : "off", (mods_on & MOD_SUBTITLES) ? "on" : "off", sub_mode);
+    fprintf(stderr, "g3mods: native mods from %s: font scale %s, subtitles %s (display time %d), extended frying %s\n",
+            path, (mods_on & MOD_FONT_SCALE) ? "on" : "off", (mods_on & MOD_SUBTITLES) ? "on" : "off", sub_mode,
+            (mods_on & MOD_EXTENDED_FRYING) ? "on" : "off");
     if (mods_on & MOD_G3FIXES)
         g3f_read_ini(profile);
     return mods_on;
@@ -377,7 +390,8 @@ void g3n_10a793e0(X86 *c) {
 /* Entity's property sets, as the mod reaches them */
 #define E_ROUTINE 0x04u
 #define E_INTERACTION 0x1cu
-#define E_INVENTORY 0x28u
+#define E_INVENTORY 0x24u
+#define E_ITEM 0x28u
 #define E_NAVIGATION 0x30u
 #define E_NPC 0x34u
 #define E_DAMAGE 0x48u
@@ -892,7 +906,7 @@ static uint32_t can_status(X86 *c, int burn) {
     if (!immune && (int32_t)(script(c, &f, "GetHitPoints", self, ENT_NONE, 0) - (uint32_t)damage) > 0) {
         const uint32_t type = call0(c, DAMAGE_TYPE, damager + E_DAMAGE);
         const int by_item = test0(c, ENT_IS_ITEM, damager) &&
-                            (call0(c, ITEM_QUALITY, damager + E_INVENTORY) & (burn ? 0x08u : 0x10u));
+                            (call0(c, ITEM_QUALITY, damager + E_ITEM) & (burn ? 0x08u : 0x10u));
         if (by_item || type == (burn ? 4u : 5u)) {
             int32_t chance;
             if (ent_pred(c, SG_IS_SPELL, damager)) {
@@ -913,7 +927,7 @@ static uint32_t can_status(X86 *c, int burn) {
                 ent_free(c, owner);
             }
             if (ent_eq(c, self, player)) {
-                const uint32_t perk = frame_alloc(&f, 0x10);
+                const uint32_t perk = frame_alloc(&f, 0x14);
                 thiscall1(c, TEMPLATE_CTOR, perk, frame_text(&f, burn ? "Perk_ResistHeat" : "Perk_ResistCold"));
                 if (test1(c, INV_SKILL_ACTIVE, player + E_INVENTORY, perk))
                     chance = (int32_t)((double)chance * 0.66);
@@ -1634,6 +1648,127 @@ void g3n_10dd4680(X86 *c) {
         }
     }
     fn_10dd4680(c);
+}
+
+/* ----------------------------------------------------------- Extended Frying -- */
+
+/* Script_ExtendedFrying.dll (docs/mods/dll-extendedfrying.md). */
+#define EF_FILTER_BASE 0x109b1570u     /* Game: the transform list's first check, thiscall (stack) */
+#define EF_IAT_PROXY_ENTITY 0x10b5c048u /* Game's import of eCTemplateEntityProxy::GetEntity */
+#define EF_IAT_ENTITY_NAME 0x10b5cd1cu /* Game's import of eCEntity::GetName, bCString const & */
+#define STR_CONTAINS 0x10002ab0u       /* bCString::Contains(char const *, int) const */
+#define STR_REPLACE 0x10003ae0u        /* bCString::Replace(char const *, char const *) */
+#define TEMPLATE_VALID 0x10f4b9d0u     /* Template::IsValid(void) const */
+#define INV_CREATE 0x10f36ce0u         /* PSInventory::CreateItems(Template const &, unsigned long, int) */
+#define INV_DELETE 0x10f36b10u         /* PSInventory::DeleteItems(int, int) */
+
+static int ef(void) {
+    return (mods() & MOD_EXTENDED_FRYING) != 0;
+}
+
+static int ef_template_valid(X86 *c, Frame *f, const char *name) {
+    const uint32_t t = frame_alloc(f, 0x14);
+    thiscall1(c, TEMPLATE_CTOR, t, frame_text(f, name));
+    const int ok = test0(c, TEMPLATE_VALID, t);
+    call0(c, TEMPLATE_DTOR, t);
+    return ok;
+}
+
+/* The mod's choice for the item named by the guest bCString `name` (0x10011ec0, and the filter's
+   test 0x10011c80): the first valid template of <name with "_Raw" replaced by "_Fried"> (empty when
+   nothing was replaced), <name>_Fried and <name>_Fried_Pan, written to out; 0 when none is. Contains
+   and Replace are SharedBase's own, so their rules are the mod's. */
+static int ef_fried(X86 *c, Frame *f, uint32_t name, char *out, size_t cap) {
+    const uint32_t text = call0(c, STR_TEXT, name);
+    char raw[256];
+    snprintf(raw, sizeof raw, "%s", text ? (const char *)(g_mem + text) : "");
+    const uint32_t copy = str_new(c, f, raw);
+    char cand[3][300];
+    if (call2(c, STR_REPLACE, copy, frame_text(f, "_Raw"), frame_text(f, "_Fried"))) {
+        const uint32_t t = call0(c, STR_TEXT, copy);
+        snprintf(cand[0], sizeof cand[0], "%s", t ? (const char *)(g_mem + t) : "");
+    } else
+        cand[0][0] = 0;
+    str_free(c, copy);
+    snprintf(cand[1], sizeof cand[1], "%s_Fried", raw);
+    snprintf(cand[2], sizeof cand[2], "%s_Fried_Pan", raw);
+    for (int i = 0; i < 3; ++i)
+        if (ef_template_valid(c, f, cand[i])) {
+            snprintf(out, cap, "%s", cand[i]);
+            return 1;
+        }
+    return 0;
+}
+
+/* H1: gCHUDListCtrlInvTransforms slot 67, whether stack `stack` goes on the page's list. Mode 3 is
+   the frying page: the original takes It_Meat_Raw and It_Meatbug_Raw; with the mod, an item
+   without "_Fried" in its name that has a fried template, and It_Meatbug_Raw as before. */
+void g3n_109b2280(X86 *c) {
+    const uint32_t self = c->r[R_ECX], stack = rd32(c->r[R_ESP] + 4);
+    if (!ef() || rd32(self + 0x34) != 3) {
+        fn_109b2280(c);
+        return;
+    }
+    uint32_t result = 0;
+    Frame f;
+    frame_open(c, &f, 0x400);
+    if (test1(c, EF_FILTER_BASE, self, stack)) {
+        const uint32_t list = rd32(self + 0x14) + 0x30;
+        const uint32_t entry = stack < rd32(list + 4) ? rd32(rd32(list) + stack * 4u) : 0;
+        const uint32_t ent = entry ? call0(c, rd32(EF_IAT_PROXY_ENTITY), entry + 0xc) : 0;
+        if (ent) {
+            const uint32_t name = call0(c, rd32(EF_IAT_ENTITY_NAME), ent);
+            char fried[300];
+            if (!(call2(c, STR_CONTAINS, name, frame_text(&f, "_Fried"), 0) & 0xffu) &&
+                ef_fried(c, &f, name, fried, sizeof fried))
+                result = 1;
+            else
+                result = test1(c, STR_EQ_CHARS, name, frame_text(&f, "It_Meatbug_Raw"));
+        }
+    }
+    restore(c, &f.s);
+    g3f_return(c, result, 4);
+}
+
+static int ef_logged;
+
+/* H2, H3, P1: OnPlayerFryStack(spu, self, other, {raw item slot, amount}), stdcall, returns 1. The
+   item in the hero's slot becomes `amount` of the mod's fried template and leaves the inventory.
+   Where no template is valid the mod would create the previous call's (or none) and still delete the
+   raw items; that case never passes the filter, and here it changes nothing. */
+void g3n_1101a740(X86 *c) {
+    if (!ef()) {
+        fn_1101a740(c);
+        return;
+    }
+    const uint32_t sp = c->r[R_ESP], spu = rd32(sp + 4), args = rd32(sp + 0x10);
+    const uint32_t slot = rd32(args), amount = rd32(args + 4);
+    Frame f;
+    frame_open(c, &f, 0x800);
+    const uint32_t self = script_entity(c, &f, spu, rd32(sp + 8), SPU_SELF);
+    const uint32_t item = frame_alloc(&f, 0xa8);
+    call2(c, INV_TEMPLATE_ITEM, self + E_INVENTORY, item, slot);
+    const uint32_t name = frame_alloc(&f, 0x10);
+    thiscall1(c, ENT_NAME, item, name);
+    char fried[300];
+    if (ef_fried(c, &f, name, fried, sizeof fried)) {
+        const uint32_t t = frame_alloc(&f, 0x14);
+        thiscall1(c, TEMPLATE_CTOR, t, frame_text(&f, fried));
+        const uint32_t a[3] = {t, 0, amount};
+        thiscall(c, INV_CREATE, self + E_INVENTORY, a, 3);
+        call0(c, TEMPLATE_DTOR, t);
+        call2(c, INV_DELETE, self + E_INVENTORY, slot, amount);
+        if (ef_logged < 5) {
+            ++ef_logged;
+            fprintf(stderr, "g3mods: extended frying: %d x %s\n", (int)amount, fried);
+        }
+    } else
+        fprintf(stderr, "g3mods: extended frying: no fried template for slot %u, nothing fried\n", slot);
+    str_free(c, name);
+    ent_free(c, item);
+    ent_free(c, self);
+    restore(c, &f.s);
+    g3f_return(c, 1, 0x10);
 }
 
 /* ---------------------------------------------------------------- G3LOC lines -- */

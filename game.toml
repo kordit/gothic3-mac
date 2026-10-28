@@ -115,6 +115,9 @@ min_free_mb = 500
 sefaris_dir = "~/Downloads/G3_Mods"
 # Script mods redone in native/mods.c: shown as built in and always on (G3_NATIVE_MODS=none turns them off).
 native_dlls = ["Script_FontScale.dll", "Script_Subtitles.dll"]
+# Redone natively for the player to switch (native/mods.c reads its id in active-mods.json): Extended Frying,
+# which Immersive World needs.
+native_mod_dlls = ["Script_ExtendedFrying.dll"]
 # The launcher's look (subtitle: the line under "ready to play"): Polish, the game's own font from the player's game folder for titles, a macOS serif for
 # text, and a frame of the intro (the ship at sunset, before the credits) as the backdrop. Nothing is bundled.
 language = "pl"
