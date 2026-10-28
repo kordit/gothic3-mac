@@ -736,9 +736,16 @@ enum FreeKind : uint8_t { FREE_UNKNOWN, FREE_BATON, FREE_DIRECT, FREE_SLEEP, FRE
 // Gothic 3 stage 5: d3dx9_40's effect code (under Engine's GetTechniqueDescription, on the render thread) asks
 // GetModuleHandleA and GetProcAddress for the same few names on every call. A module's handle and an export's
 // address do not change once the module is in, so a free thread's answer is remembered by its arguments: the first
-// one runs with the baton, the rest from the table. A failed lookup is not remembered.
+// one runs with the baton, the rest from the table. A failed lookup is remembered until the next LoadLibrary that
+// brings a module in (recomp_module_load_generation): d3dx9 asks GetModuleHandleA for its debug runtime, which is
+// never there, twice per GetTechniqueDescription, and each of those waited for the baton (session 17: the render
+// thread waited a third of its time).
+extern "C" uint32_t recomp_module_load_generation(); // kernel32.cpp
+struct Lookup {
+    uint32_t value, generation, last_error;
+};
 std::mutex g_lookup_mutex;
-std::unordered_map<std::string, uint32_t> g_lookups;
+std::unordered_map<std::string, Lookup> g_lookups;
 std::string lookup_key(uint32_t idx, X86 *c) {
     std::string k = std::to_string(idx) + ':';
     const bool proc = idx < g_hot_count && g_hot[idx].desc && strcasestr(g_hot[idx].desc, "GetProcAddress");
@@ -867,17 +874,22 @@ __attribute__((noinline)) bool free_dispatch(X86 *c, uint32_t target) {
         {
             std::lock_guard<std::mutex> lk(g_lookup_mutex);
             auto it = g_lookups.find(key);
-            if (it != g_lookups.end()) {
-                set_eax(c, it->second);
+            if (it != g_lookups.end() &&
+                (it->second.value || it->second.generation == recomp_module_load_generation())) {
+                set_eax(c, it->second.value);
+                if (!it->second.value)
+                    set_last_error(it->second.last_error);
                 break;
             }
         }
+        const uint32_t generation = recomp_module_load_generation();
         sched_free_acquire();
         const bool r = imports_dispatch(c, target);
+        const uint32_t error = c->r[R_EAX] ? 0u : get_last_error();
         sched_free_release();
-        if (c->r[R_EAX]) {
+        {
             std::lock_guard<std::mutex> lk(g_lookup_mutex);
-            g_lookups.emplace(key, c->r[R_EAX]);
+            g_lookups[key] = Lookup{c->r[R_EAX], generation, error};
         }
         return r;
     }

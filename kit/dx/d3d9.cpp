@@ -5877,8 +5877,17 @@ void d3d9_Direct3DCreate9(X86 *c) {
     set_eax(c, view);
 }
 
+// d3d9.dll's debug-runtime switch, which the retail DLL exports as a no-op. D3DX 9 (d3dx9_40, under every
+// GetTechniqueDescription) looks it up with GetModuleHandleA, LoadLibraryA and GetProcAddress until it finds it and
+// then calls it, PUSH arg; CALL; POP: cdecl. Without the export every effect query repeated the lookup (Gothic 3: a
+// LoadLibraryA with the baton on the render thread of stage 5, a third of that thread's time waiting).
+void d3d9_DebugSetMute(X86 *c) {
+    set_eax(c, 0);
+}
+
 static const ImportShim g_d3d9_exports[] = {
     {"d3d9.dll", "Direct3DCreate9", 1, d3d9_Direct3DCreate9},
+    {"d3d9.dll", "DebugSetMute", ARGC_CDECL, d3d9_DebugSetMute},
 };
 
 void d3d9_reset() {

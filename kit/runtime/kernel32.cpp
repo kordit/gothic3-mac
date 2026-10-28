@@ -1238,6 +1238,14 @@ bool loader_attach_module(X86 *c, LoaderModule &m) {
 
 namespace {
 
+} // namespace
+// Bumped by every LoadLibrary that makes a module present, so a remembered "no such module" (imports.cpp
+// FREE_LOOKUP) is good only until the next load.
+std::atomic<uint32_t> g_module_loads{0};
+extern "C" uint32_t recomp_module_load_generation() {
+    return g_module_loads.load(std::memory_order_acquire);
+}
+namespace {
 void load_library_named(X86 *c, const std::string &module_name) {
     std::string name = library_name(module_name);
     auto it = modules().find(name);
@@ -1262,6 +1270,7 @@ void load_library_named(X86 *c, const std::string &module_name) {
                 set_eax(c, 0);
                 return;
             }
+            g_module_loads.fetch_add(1, std::memory_order_acq_rel);
         } else {
             ++m->load_refs;
         }
@@ -1279,6 +1288,7 @@ void load_library_named(X86 *c, const std::string &module_name) {
     uint32_t h = g_next_module;
     g_next_module += 0x10000;
     modules()[name] = h;
+    g_module_loads.fetch_add(1, std::memory_order_acq_rel);
     LOGV("LoadLibrary(\"%s\") -> pseudo module %08x", name.c_str(), h);
     set_eax(c, h);
 }
