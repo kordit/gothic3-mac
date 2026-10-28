@@ -25,7 +25,9 @@ profile=$(.venv/bin/python -c "import os, sys; sys.path.insert(0, 'tools'); impo
 # the game; the bench said 70 fps in a fight where the player had 20). Copies, never the player's files:
 # - mods: the player's active-mods.json (BENCH_MODS_FILE another list, BENCH_MODS=0 unmodded);
 # - host settings: the player's mod-settings.json (BENCH_PLAYER_SETTINGS=0 keeps the profile's own);
-# - drawable: the player's screen, 3456x2170 (BENCH_DRAWABLE another size).
+# - drawable: the player's screen, 3456x2170 (BENCH_DRAWABLE another size);
+# - game data: the player's game folder, read only, when RECOMP_EXE is unset (BENCH_GAME=stage runs on stage/), with
+#   the archives the player's profile lays over its Data (Waste Data Patch 2.0, D-040) linked into this profile.
 # ge3.ini, UserOptions.ini and Shader.Cache come from the player's profile already (tools/run.py prepare_profile).
 player="$HOME/Library/Application Support/Gothic 3 Native"
 if [ "${BENCH_MODS:-1}" = 1 ]; then
@@ -35,6 +37,17 @@ else
 fi
 if [ "${BENCH_PLAYER_SETTINGS:-1}" = 1 ] && [ -f "$player/mod-settings.json" ]; then
   cp "$player/mod-settings.json" "$profile/mod-settings.json"
+fi
+mkdir -p "$profile/Data"
+for f in "$profile"/Data/*.pak "$profile"/Data/*.cpt "$profile"/Data/*.p[0-9][0-9]; do
+  [ -L "$f" ] && rm -f "$f"
+done
+for f in "$player"/Data/*.pak "$player"/Data/*.cpt "$player"/Data/*.p[0-9][0-9]; do
+  [ -e "$f" ] && ln -s "$f" "$profile/Data/${f##*/}"
+done
+game_exe="$player/game/Gothic3Final.exe"
+if [ -z "${RECOMP_EXE:-}" ] && [ "${BENCH_GAME:-player}" != stage ] && [ -f "$game_exe" ]; then
+  export RECOMP_EXE="$game_exe"
 fi
 .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.build_mod_view('$profile')" >&2
 # The new game's intro (G3_Intro.bik, 5354 frames, about 214 s) skipped as tools/run.py does for newgame;
