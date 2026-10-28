@@ -28,6 +28,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <time.h>
 
 void fn_1026c3e0(X86 *c); /* Engine eCApplication::OnInitializeEngine(eSSetupEngine &) */
@@ -101,6 +102,20 @@ void g3n_1026c3e0(X86 *c) {
         ld_pool = 1;
         fprintf(stderr, "[g3] load: the image cache gets %u loader thread%s\n", n, n == 1 ? "" : "s");
     }
+    /* G3_CACHE_THREADS=mesh,anim,sound,material,collision,vpool (session 18, a measurement): those caches get a
+     * loader thread too. The player's stutters walking in the Reddock cave were DoLoad reading archive entries
+     * inside the frame (kit hostprof spike stacks); eCApplication::CreateEngine 10270e40 names the counts (Image,
+     * Material, Mesh, Sound, Vertexpool, CollisionMesh, Animation) at these offsets of eSSetupEngine. */
+    static const struct {
+        const char *name;
+        uint32_t at;
+    } caches[] = {{"vpool", 0x64u}, {"material", 0x6cu}, {"mesh", 0x70u}, {"sound", 0x74u}, {"collision", 0x7cu}, {"anim", 0x80u}};
+    const char *more = getenv("G3_CACHE_THREADS");
+    for (size_t i = 0; G3OPT(LOAD) && more && i < sizeof caches / sizeof caches[0]; ++i)
+        if (strstr(more, caches[i].name) && rd32(setup + caches[i].at) == 0u) {
+            wr32(setup + caches[i].at, 1u);
+            fprintf(stderr, "[g3] load: the %s cache gets a loader thread (G3_CACHE_THREADS)\n", caches[i].name);
+        }
 }
 
 /* A queued item's work on a loader thread, as the phase "bg load": wall time, so it includes the stretches in which
@@ -113,10 +128,11 @@ void g3n_1044f1d0(X86 *c) {
     const uint64_t ns = g3_phase_now() - t0;
     g3_phase("bg load", t0);
     static int told;
-    if (ns > 40000000u && told < 100) {
+    const int game = g3_on_game_thread();
+    if (ns > (game ? 15000000u : 40000000u) && told < 200) {
         ++told;
-        fprintf(stderr, "[g3] load: a loader item took %.1f ms (kind %u, resource vtable %08x)\n", ns / 1e6, kind,
-                res ? rd32(res) : 0u);
+        fprintf(stderr, "[g3] load: a loader item took %.1f ms (kind %u, resource vtable %08x, %s)\n", ns / 1e6, kind,
+                res ? rd32(res) : 0u, game ? "on the game thread" : "on a loader thread");
     }
 }
 
