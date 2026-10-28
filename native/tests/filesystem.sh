@@ -3,7 +3,8 @@
 #
 # Builds native/tests/filesystem_test.cpp, then for ExtendedContent off and on compares its walk of every mounted
 # folder (path, size, attributes, the archive or disk an open gets) with tools/g3pak.py index, and runs the write
-# calls on a temporary folder. The game folder is read only; the default is stage/. Output goes to $TMPDIR.
+# calls on a temporary folder, and checks that finds without wildcards answer the same through the archives' maps as
+# through the walk over every name. The game folder is read only; the default is stage/. Output goes to $TMPDIR.
 set -e
 here=$(cd "$(dirname "$0")" && pwd)
 wt=$(cd "$here/../.." && pwd)
@@ -28,6 +29,9 @@ done
 find "$game/Data" -maxdepth 1 \( -iname '*.pak' -o -iname '*.p0?' -o -iname '*.cpt' -o -iname '*.c0?' \
     -o -iname '*.mod' -o -iname '*.m0?' -o -iname '*.nod' -o -iname '*.n0?' \) -print0 |
     xargs -0 "$out/filesystem_test" read || status=1
+for ext in 0 1; do
+    "$out/filesystem_test" names "$game" $ext || status=1
+done
 scratch=$(mktemp -d "$out/scratch.XXXXXX")
 rmdir "$scratch"
 "$out/filesystem_test" scratch "$scratch" || status=1

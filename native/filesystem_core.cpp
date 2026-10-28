@@ -6,12 +6,15 @@
 
 extern "C" int g3fs_name_fits(const char *pattern, const char *name); // filesystem_match.c
 
+#include <algorithm>
 #include <cstring>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
 namespace g3fs {
+
+bool linear_names = false;
 
 namespace {
 
@@ -199,6 +202,28 @@ void fill(const Node &n, FindData *d) {
     }
 }
 
+// The names a pattern without '*' and '?' fits (10da9d30 then compares the halves character by character, folded): its
+// base and extension both whole, so the pattern itself, and with no extension also the name with a '.' after it. False
+// where the walk has to answer: a wildcard, a half of 255 bytes or more (the original cuts it), an empty pattern.
+bool plain_names(const std::string &pat, std::string names[2], int *count) {
+    if (pat.find_first_of("*?") != std::string::npos)
+        return false;
+    const size_t dot = pat.find('.');
+    const size_t base = dot == std::string::npos ? pat.size() : dot;
+    const size_t ext = dot == std::string::npos ? 0 : pat.size() - dot - 1;
+    if (base >= 255 || ext >= 255 || (base == 0 && ext == 0))
+        return false;
+    if (ext) {
+        names[0] = pat;
+        *count = 1;
+    } else {
+        names[0] = pat.substr(0, base);
+        names[1] = names[0] + ".";
+        *count = 2;
+    }
+    return true;
+}
+
 // One archive's part of a find (10da5770, 10da46f0, 10da4800): the results in the folder the rest names.
 void pack_results(Pack &pack, const std::string &rest, std::vector<std::pair<FindData, std::string>> *out) {
     const std::string q = strip_slash(rest);
@@ -218,6 +243,35 @@ void pack_results(Pack &pack, const std::string &rest, std::vector<std::pair<Fin
         fill(*f->parent, &u);
         u.name = "..";
         out->push_back({u, f->path + u.name});
+    }
+    std::string names[2];
+    int count = 0;
+    if (!linear_names && f->exact_names && plain_names(pat, names, &count)) { // the walk's results, by key
+        std::vector<size_t> at;
+        for (int i = 0; i < count; ++i) {
+            auto it = f->dir_at.find(lower(f->path + names[i] + "/"));
+            if (it != f->dir_at.end())
+                at.push_back(it->second);
+        }
+        std::sort(at.begin(), at.end());
+        for (size_t k : at) {
+            FindData r;
+            fill(*f->dirs[k], &r);
+            out->push_back({r, f->path + r.name});
+        }
+        at.clear();
+        for (int i = 0; i < count; ++i) {
+            auto it = f->file_at.find(lower(f->path + names[i]));
+            if (it != f->file_at.end())
+                at.push_back(it->second);
+        }
+        std::sort(at.begin(), at.end());
+        for (size_t k : at) {
+            FindData r;
+            fill(*f->files[k], &r);
+            out->push_back({r, f->path + r.name});
+        }
+        return;
     }
     for (Node *d : f->dirs)
         if (name_fits(pat, d->name)) {
@@ -296,11 +350,15 @@ struct Reader { // the tree in memory (10da5cd0) and the cursor of its stream
 };
 
 void index_child(Node *parent, Node *child) {
+    if (child->path != parent->path + child->name + (child->folder ? "/" : ""))
+        parent->exact_names = false;
     if (child->folder) {
-        parent->dir_at.emplace(lower(child->path), parent->dirs.size());
+        if (!parent->dir_at.emplace(lower(child->path), parent->dirs.size()).second)
+            parent->exact_names = false;
         parent->dirs.push_back(child);
     } else {
-        parent->file_at.emplace(lower(child->path), parent->files.size());
+        if (!parent->file_at.emplace(lower(child->path), parent->files.size()).second)
+            parent->exact_names = false;
         parent->files.push_back(child);
     }
 }

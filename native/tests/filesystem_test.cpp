@@ -9,13 +9,18 @@
 // file name, or "disk"). tools/g3pak.py index computes the same lines on its own from the archives' trees.
 // read <archive>...: every entry read and inflated, its length checked.
 // scratch <dir>: create, write-time, delete and attribute calls on a temporary folder, checked against the contract.
+// names <game> <extended 0|1>: for the names of every mounted folder (up to 1500 a folder), finds without wildcards
+// (the name, other case, a '.' after it, without its extension, one that is not there) answered by the archives' maps
+// and by the walk over every name (g3fs::linear_names), compared result by result.
 #include "../filesystem_core.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -179,6 +184,77 @@ void walk(g3fs::FileSystem &fs, const std::string &dir, std::vector<std::string>
     }
 }
 
+// Every folder's entries as a find of "<dir>/*.*" lists them: the folder and the names, folders included.
+void entries(g3fs::FileSystem &fs, const std::string &dir, std::vector<std::pair<std::string, std::string>> *out) {
+    std::vector<g3fs::FindData> found;
+    if (!fs.find(dir + "/*.*", &found))
+        return;
+    for (const auto &d : found) {
+        if (d.name == "." || d.name == "..")
+            continue;
+        out->push_back({dir, d.name});
+        if (d.w[10] & 0x10u)
+            entries(fs, dir + "/" + d.name, out);
+    }
+}
+
+bool same(const std::vector<g3fs::FindData> &a, const std::vector<g3fs::FindData> &b) {
+    if (a.size() != b.size())
+        return false;
+    for (size_t i = 0; i < a.size(); ++i)
+        if (a[i].name != b[i].name || a[i].physical != b[i].physical || a[i].filled != b[i].filled ||
+            memcmp(a[i].w, b[i].w, sizeof a[i].w) != 0)
+            return false;
+    return true;
+}
+
+int run_names(const std::string &root, bool extended) {
+    PosixDisk disk;
+    g3fs::FileSystem fs(disk);
+    std::vector<std::string> virtuals;
+    if (int rc = mount(fs, root, extended, &virtuals))
+        return rc;
+    std::vector<std::pair<std::string, std::string>> all;
+    for (const auto &v : virtuals)
+        entries(fs, v, &all);
+    std::map<std::string, unsigned> per_dir;
+    unsigned long finds = 0, hits = 0, bad = 0;
+    double t_maps = 0, t_walk = 0;
+    std::vector<g3fs::FindData> fast, walk;
+    auto timed = [](g3fs::FileSystem &fs, const std::string &p, std::vector<g3fs::FindData> *r, double *t) {
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = fs.find(p, r);
+        *t += std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        return ok;
+    };
+    for (const auto &e : all) {
+        if (per_dir[e.first]++ >= 1500)
+            continue;
+        const std::string &n = e.second;
+        std::string upper(n), base = n.substr(0, n.find('.'));
+        for (char &c : upper)
+            if (c >= 'a' && c <= 'z')
+                c = (char)(c - 32);
+        for (const std::string &q : {n, upper, n + ".", base, base + ".", n + "q", lowered(n)}) {
+            const std::string pattern = e.first + "/" + q;
+            g3fs::linear_names = false;
+            const bool f1 = timed(fs, pattern, &fast, &t_maps);
+            g3fs::linear_names = true;
+            const bool f2 = timed(fs, pattern, &walk, &t_walk);
+            ++finds;
+            hits += f1;
+            if (f1 != f2 || !same(fast, walk)) {
+                if (++bad <= 20)
+                    printf("DIFF %s: maps %zu, walk %zu\n", pattern.c_str(), fast.size(), walk.size());
+            }
+        }
+    }
+    g3fs::linear_names = false;
+    printf("names, ExtendedContent %d: %zu entries, %lu finds (%lu with results), %lu differ; maps %.1f s, walk %.1f s\n",
+           extended ? 1 : 0, all.size(), finds, hits, bad, t_maps, t_walk);
+    return bad ? 1 : 0;
+}
+
 int run_index(const std::string &root, bool extended) {
     PosixDisk disk;
     g3fs::FileSystem fs(disk);
@@ -284,8 +360,10 @@ int main(int argc, char **argv) {
         return read_all(argc - 2, argv + 2);
     if (argc == 4 && !strcmp(argv[1], "index"))
         return run_index(argv[2], argv[3][0] == '1');
+    if (argc == 4 && !strcmp(argv[1], "names"))
+        return run_names(argv[2], argv[3][0] == '1');
     if (argc == 3 && !strcmp(argv[1], "scratch"))
         return scratch(argv[2]);
-    fprintf(stderr, "usage: filesystem_test index <game folder> <extended 0|1> | scratch <new folder>\n");
+    fprintf(stderr, "usage: filesystem_test index|names <game folder> <extended 0|1> | scratch <new folder>\n");
     return 2;
 }

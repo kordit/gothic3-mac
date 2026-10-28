@@ -58,6 +58,9 @@ struct Node {
     Node *parent = nullptr;
     std::vector<Node *> dirs, files;
     std::unordered_map<std::string, size_t> dir_at, file_at; // lower-case path -> first position
+    // Every child's path is this path plus its name (a folder's with '/'), and no two children share a key: then a
+    // find without wildcards gets the same results from the maps as from the walk over every name.
+    bool exact_names = true;
 };
 
 struct Pack {
@@ -137,5 +140,7 @@ int64_t pack_pread(const Pack &pack, uint64_t at, void *buf, size_t n);
 // The name match FindFirstFileA uses (10da9e10 with 10da9d30): pattern and name split at the first '.'.
 bool name_fits(const std::string &pattern, const std::string &name);
 std::string lower(const std::string &s);
+// Tests only: every find walks the archive folder's names, as the original does, instead of using the maps.
+extern bool linear_names;
 
 } // namespace g3fs
