@@ -18,6 +18,7 @@
 #include "com.h"
 #include "dx.h"
 #include "../runtime/guest.h"
+#include "../runtime/hostprof.h"
 #include "../runtime/memory.h"
 #include "../runtime/display_seam.h"
 #include "game_config.h"
@@ -338,6 +339,7 @@ static void frame_times(uint32_t draws) {
     ++frames;
     const uint64_t dt = now - last;
     last = now;
+    hostprof_frame(dt / 1e6);
     const bool slow = dt > 50000000u && slow_lines < 20;
     char phases[256];
     phases_frame(phases, sizeof phases, slow);

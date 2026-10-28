@@ -6,6 +6,9 @@
 // or write them to <prefix>-<n>.txt. Both do nothing without the variable.
 void hostprof_reset();
 void hostprof_report();
+// Each presented frame, from the game thread, with its present-to-present time
+// (RECOMP_HOST_PROFILE_SPIKE: keeps the stacks of a frame at least that long).
+void hostprof_frame(double frame_ms);
 // Baton hold time and guest CPU per guest thread in ms per frame, between the same two
 // keys (kernel32.cpp); Present counts the frames.
 void sched_hold_reset();
