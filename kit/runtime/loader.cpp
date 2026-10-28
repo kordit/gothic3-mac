@@ -335,37 +335,6 @@ struct AuxSpec {
 const AuxSpec g_aux_specs[] = RECOMP_AUX_MODULES;
 std::vector<LoaderModule> g_aux;
 
-// [modules.aux.<key>] data: a value in a mapped module's data replaced before any of its code runs (Gothic 3: the
-// image cache's coefficient in Engine's GetOptimalCacheSizes, D-045). The module's bytes must still hold the expected
-// value; anything else is another build of the module and stops the load.
-struct DataPatch {
-    uint32_t at, bytes;
-    uint64_t was, now;
-};
-const DataPatch g_data_patches[] = RECOMP_DATA_PATCHES;
-
-bool apply_data_patches() {
-    for (uint32_t i = 0; i < RECOMP_DATA_PATCH_COUNT; ++i) {
-        const DataPatch &d = g_data_patches[i];
-        uint64_t held = rd32(d.at);
-        if (d.bytes == 8)
-            held |= uint64_t(rd32(d.at + 4)) << 32;
-        if (held != d.was) {
-            char buf[160];
-            snprintf(buf, sizeof buf, "data at %08x holds %016llx, expected %016llx", d.at,
-                     (unsigned long long)held, (unsigned long long)d.was);
-            g_error = buf;
-            return false;
-        }
-        wr32(d.at, uint32_t(d.now));
-        if (d.bytes == 8)
-            wr32(d.at + 4, uint32_t(d.now >> 32));
-        LOGW("loader: data at %08x: %016llx -> %016llx", d.at, (unsigned long long)d.was,
-             (unsigned long long)d.now);
-    }
-    return true;
-}
-
 bool load_aux_module(const AuxSpec &spec) {
     LoaderModule m;
     m.name = spec.name;
@@ -872,8 +841,6 @@ bool loader_load(const char *exe_path) {
     for (LoaderModule &m : g_aux)
         if (!bind_aux_module(m))
             return false;
-    if (!apply_data_patches())
-        return false;
     g_main.imports.clear();
     if (!patch_iat(file, opt_off, opt_magic, g_base, g_size, &g_main.imports))
         return false;

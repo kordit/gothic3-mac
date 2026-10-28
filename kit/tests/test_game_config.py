@@ -395,22 +395,6 @@ class LoadTests(unittest.TestCase):
                 (game / "game.toml").write_text(text + 'data_in_code = ' + ranges + '\n')
                 with self.assertRaises(ValueError):
                     game_config.load(game)
-            self.assertEqual(mod["data"], [])
-            self.assertIn("#define RECOMP_DATA_PATCH_COUNT 0", header)
-            (game / "game.toml").write_text(
-                text + 'data = [{at = 0x10001000, f64 = 2.0, was = 1.0}, {at = 0x10001008, u32 = 7, was = 5}]\n')
-            patched = game_config.load(game)
-            self.assertEqual(patched["aux_modules"][0]["data"],
-                             [(0x10001000, 8, 0x3ff0000000000000, 0x4000000000000000), (0x10001008, 4, 5, 7)])
-            self.assertIn("#define RECOMP_DATA_PATCHES {{0x10001000u, 8u, 0x3ff0000000000000ull, "
-                          "0x4000000000000000ull}, {0x10001008u, 4u, 0x0000000000000005ull, 0x0000000000000007ull}}",
-                          gen_game_config.render_header(patched))
-            for data in ('[{at = 0x10001000, f64 = 2.0}]', '[{at = 0x10001000, f64 = 2.0, u32 = 1, was = 1}]',
-                         '[{at = 0x10027ffc, f64 = 2.0, was = 1.0}]', '[{at = 0x10001000, u32 = -1, was = 0}]',
-                         '[{at = 0x10001000, u32 = 1, was = 0, x = 1}]', '{at = 0x10001000}'):
-                (game / "game.toml").write_text(text + 'data = ' + data + '\n')
-                with self.assertRaises(ValueError):
-                    game_config.load(game)
             bad = text.replace('guest_size = 0x10100000', 'guest_size = 0x10000000')
             (game / "game.toml").write_text(bad)
             with self.assertRaises(ValueError):
