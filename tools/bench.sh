@@ -5,6 +5,10 @@
 #   swiat      the world (the engine's NoMenu), standing, 240 s
 #   chodzenie  the player's QuickSave (F9), then about 5 minutes of walking with turns
 #   walka      a new game, then the Ardea fight at its start, swinging, 360 s
+#   sceny      reference pictures to compare before and after a change: the world, then for each scene of SCENES
+#              (default below; one a line, "name;console command;console command") the commands through G3CMD, the
+#              world frozen (timer.fTimeScale=0) 15 s later, and two frames 1 s apart, smoke_<name>_{a,b}_present.ppm.
+#              The two frames' difference is the scene's own noise. Compared by tools/sceny_diff.py.
 # Everything of one run goes to work/bench-<etykieta>/ (default <scenariusz>-<MMDD-HHMM>): bench.log (frame times
 # every 10 s, FRAMES=10), the stacks of every frame over 45 ms (s-spike-*.txt, with syms.txt), and at the end a
 # summary of both on stdout (tools/bench_summary.py, tools/spike_report.py). Stopped by PID after its time.
@@ -19,7 +23,8 @@ case "$scenario" in
   swiat) mode=world; secs=240; skip=3 ;;
   chodzenie) mode=world; secs=420; skip=12 ;;
   walka) mode=newgame; secs=360; skip=12 ;;
-  *) echo "usage: tools/bench.sh swiat|chodzenie|walka [etykieta]" >&2; exit 2 ;;
+  sceny) mode=world; skip=3 ;;
+  *) echo "usage: tools/bench.sh swiat|chodzenie|walka|sceny [etykieta]" >&2; exit 2 ;;
 esac
 label=${2:-$scenario-$(date +%m%d-%H%M)}
 out="$PWD/work/bench-$label"
@@ -47,6 +52,22 @@ elif [ "$scenario" = walka ]; then
     i=$((i + 1))
   done
 fi
+# Scenes: the commands at a fixed time from the start, the frames at the same times in the script, so both run on
+# one plan; the world is in by T0 (about 60 s on the player's setup) and each scene takes 25 s.
+T0=100
+SCENES=${SCENES:-'noc;goto Ardea;game.SetTime(23,0)
+cienie;goto Ardea;game.SetTime(17,30)
+dzien;goto Ardea;game.SetTime(12,0)
+walka;goto Grok;game.SetTime(12,0)
+woda;goto Vatras;game.SetTime(12,0)'}
+if [ "$scenario" = sceny ]; then
+  n=$(printf '%s\n' "$SCENES" | grep -c .)
+  secs=$((T0 + 25 * n + 5))
+  steps="wait $((T0 * 1000))\n"
+  for name in $(printf '%s\n' "$SCENES" | cut -d';' -f1); do
+    steps="${steps}wait 18000\ndump ${name}_a\nwait 1000\ndump ${name}_b\nwait 6000\n"
+  done
+fi
 printf '%b' "$steps" > "$out/bench.smoke"
 printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$out/bench.smoke"
 printf 'FRAMES=10\n' > "$out/bench.ctl"
@@ -72,10 +93,27 @@ nm -n "$bin" > "$out/syms.txt"
 RECOMP_EXE="$player/game/Gothic3Final.exe" RECOMP_BINK_SKIP=G3_Intro \
   RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
   RECOMP_TRACE_CONTROL="$out/bench.ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE=3456x2170 \
-  RECOMP_HOST_PROFILE="$out/s" RECOMP_HOST_PROFILE_SPIKE=45 \
+  RECOMP_HOST_PROFILE="$out/s" RECOMP_HOST_PROFILE_SPIKE=45 RECOMP_HOST_DUMP_DIR="$out" \
   nohup "$bin" --script "$out/bench.smoke" > "$out/bench.log" 2>&1 &
 pid=$!
 echo "$pid" > "$out/bench.pid"
+if [ "$scenario" = sceny ]; then
+  (
+    sleep $T0
+    i=0
+    printf '%s\n' "$SCENES" | while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      i=$((i + 1))
+      echo "G3CMD=timer.fTimeScale=1.0 #$i" >> "$out/bench.ctl"
+      printf '%s\n' "$line" | cut -d';' -f2- | tr ';' '\n' | while IFS= read -r cmd; do
+        echo "G3CMD=$cmd #$i" >> "$out/bench.ctl"
+      done
+      sleep 15
+      echo "G3CMD=timer.fTimeScale=0.0 #$i" >> "$out/bench.ctl"
+      sleep 10
+    done
+  ) &
+fi
 end=$(( $(date +%s) + secs + 30 ))
 while kill -0 "$pid" 2>/dev/null && [ "$(date +%s)" -lt "$end" ]; do sleep 5; done
 kill "$pid" 2>/dev/null
