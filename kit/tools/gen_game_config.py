@@ -98,6 +98,12 @@ def render_header(cfg):
     lines.append("#define RECOMP_IMPORT_FORWARDS {%s}" % ", ".join(
         "{%s, %s, %s, %s}" % (c_hex(base), c_string(dll), c_string(name), c_hex(to))
         for base, dll, name, to in forwards) if forwards else "#define RECOMP_IMPORT_FORWARDS {{0u, 0, 0, 0u}}")
+    # Data values the loader replaces in a mapped module: {address, bytes (4 or 8), expected, new}.
+    patches = [d for m in cfg["aux_modules"] for d in m["data"]]
+    lines.append("#define RECOMP_DATA_PATCH_COUNT %d" % len(patches))
+    lines.append("#define RECOMP_DATA_PATCHES {%s}" % ", ".join(
+        "{%s, %du, 0x%016xull, 0x%016xull}" % (c_hex(at), n, was, now) for at, n, was, now in patches)
+        if patches else "#define RECOMP_DATA_PATCHES {{0u, 0u, 0ull, 0ull}}")
     # The mod runtime's built-in game integrations (animation clock, native
     # options menu, settings persistence, sprite view) were written against
     # Populous and hook its routines by address. Another game turns them off.
