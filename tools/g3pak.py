@@ -4,6 +4,7 @@
     tools/g3pak.py list <archive>
     tools/g3pak.py diff <archive A> <archive B>
     tools/g3pak.py pack <folder> <archive>
+    tools/g3pak.py index <game folder> <extended 0|1>
     tools/g3pak.py selftest
 
 The layout (after UniLinkIF/gothic3-impexp core/src/volume.rs, checked on
@@ -33,6 +34,8 @@ compiledinfos_G3_World_01.bin and stringtable.bin. Whether the engine then
 rebuilds those caches is not checked here."""
 
 import hashlib
+import mmap
+import os
 from pathlib import Path
 import struct
 import sys
@@ -42,11 +45,14 @@ import zlib
 class Pak:
     def __init__(self, path):
         self.path = Path(path)
-        self.data = self.path.read_bytes()
+        with open(self.path, "rb") as f:
+            self.data = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) if os.path.getsize(self.path) else b""
         if self.data[4:8] != b"G3V0":
             raise SystemExit("%s: not a Gothic 3 archive" % path)
         self.at = struct.unpack_from("<Q", self.data, 32)[0]
         self.files = {}
+        self.attributes = {}
+        self.dirs = set()
         self.node()
 
     def u32(self):
@@ -68,7 +74,7 @@ class Pak:
         self.at += 32
         attributes = self.u32()
         if attributes & 0x10:
-            self.name()
+            self.dirs.add(self.name())
             for _ in range(self.u32()):
                 self.node()
             for _ in range(self.u32()):
@@ -79,6 +85,7 @@ class Pak:
         path = self.name()
         self.name()
         self.files[path.lower()] = (path, offset, stored, size, encryption, compression)
+        self.attributes[path.lower()] = attributes
 
     def read(self, key):
         path, offset, stored, size, encryption, compression = self.files[key]
@@ -177,7 +184,64 @@ def selftest():
     print("g3pak selftest: ok")
 
 
+def index(root, extended):
+    """The lines native/tests/filesystem_test.cpp's index prints, from the archives and the disk alone."""
+    fold = str.maketrans("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")  # the module folds A-Z only
+    root = Path(root)
+    lines = set()
+    section = None
+    for raw in (root / "Ini" / "mountlist.ini").read_text("latin-1").splitlines():
+        line = raw.strip("\r")
+        if not line or line.startswith(";"):
+            continue
+        if line.startswith("["):
+            section = line.lower()
+            continue
+        if section != "[list]" or "=" not in line:
+            continue
+        virtual, physical = line.split("=", 1)
+        if "projects" in virtual.lower():
+            physical = "Data/Projects_compiled"
+        base = root / physical
+        paks = []
+        for first, letter, on in ((".pak", "p", True), (".cpt", "c", extended), (".mod", "m", True),
+                                  (".nod", "n", extended)):
+            if not on or not Path(str(base) + first).is_file():
+                continue
+            paks.append(Path(str(base) + first))
+            i = 0
+            while Path(str(base) + ".%s%02d" % (letter, i)).is_file():
+                paks.append(Path(str(base) + ".%s%02d" % (letter, i)))
+                i += 1
+        opened = []
+        for p in paks:
+            pak = Pak(p)
+            files = {v[0].translate(fold): (v[3], pak.attributes[k]) for k, v in pak.files.items()}
+            opened.append((pak.path.name, files, {d.translate(fold) for d in pak.dirs}))
+        on_disk = {}
+        if base.is_dir():
+            for d, _, names in os.walk(base):
+                for n in names:
+                    full = Path(d) / n
+                    on_disk[full.relative_to(base).as_posix().translate(fold)] = full
+        prefix = ("#G3:/" + virtual + "/").translate(fold)
+        for key, full in on_disk.items():
+            writable = os.access(full, os.W_OK)
+            lines.add("%s%s\t%d\t%#x\tdisk" % (prefix, key, full.stat().st_size, 0x80 if writable else 0x81))
+        for i, (name, files, dirs) in enumerate(opened):
+            for key, (size, attributes) in files.items():
+                if key in on_disk or any(key in q[1] or key + "/" in q[2] for q in opened[i + 1:]):
+                    continue
+                lines.add("%s%s\t%d\t%#x\t%s" % (prefix, key, size, attributes, name))
+    out = sys.stdout.buffer
+    for line in sorted(lines, key=lambda t: t.encode("latin-1")):
+        out.write(line.encode("latin-1") + b"\n")
+
+
 def main():
+    if len(sys.argv) == 4 and sys.argv[1] == "index":
+        index(sys.argv[2], sys.argv[3] == "1")
+        return
     if sys.argv[1:] == ["selftest"]:
         selftest()
         return
