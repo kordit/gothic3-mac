@@ -867,6 +867,10 @@ int host_d9_texture_read(uint32_t id, uint32_t face, uint32_t level, uint8_t *by
     RenderThread *t = render_thread();
     return t && t->sync([&] { return backend()->read(id, face, level, bytes, pitch); }) ? 1 : 0;
 }
+int host_d9_texture_reads_back(uint32_t id) {
+    RenderThread *t = render_thread();
+    return t && t->sync([&] { return backend()->reads_back(id); }) ? 1 : 0;
+}
 void host_d9_texture_read_async(uint32_t id, uint32_t face, uint32_t level, uint32_t ticket) {
     RenderThread *t = render_thread();
     if (!t || !ticket)

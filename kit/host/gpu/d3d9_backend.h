@@ -27,6 +27,9 @@ class D9Backend {
                         uint32_t pitch) = 0;
     virtual bool read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes,
                       uint32_t pitch) = 0;
+    // Whether read() gives back every face/level of this texture as the bytes upload() was given, so the GPU's copy
+    // can be the only one (Gothic 3 session 22: a managed texture's levels keep no copy in the shim).
+    virtual bool reads_back(uint32_t id) { (void)id; return false; }
 
     // Queues a copy of a colour face/level (direct 32-bit formats) behind the work already
     // encoded, without waiting. When the GPU has run it, `deliver` is called - from any thread -

@@ -1350,7 +1350,11 @@ static bool is_buffer(const ComObj *o) {
     return o->kind == K_D3D9VB || o->kind == K_D3D9IB;
 }
 
+static uint32_t gpu_only_lock(ComObj *s);
+static void gpu_only_unlock(ComObj *s);
 static uint32_t stage_lock(ComObj *o, uint32_t flags = 0) {
+    if (o && o->gpu_only)
+        return gpu_only_lock(o);
     if (!o || o->blob.empty())
         return 0;
     if (o->lock_count == 0)
@@ -1373,6 +1377,10 @@ static uint32_t stage_lock(ComObj *o, uint32_t flags = 0) {
 }
 
 static void stage_unlock(ComObj *o) {
+    if (o && o->gpu_only) {
+        gpu_only_unlock(o);
+        return;
+    }
     if (!o || o->lock_count <= 0)
         return;
     if (--o->lock_count == 0 && o->pixels && o->pixels == o->stage_kept) {
@@ -1772,6 +1780,54 @@ static GpuMirror &gpu_define(ComObj *o) {
     return m;
 }
 
+// A level whose bytes are only on the GPU (ComObj::gpu_only).
+static uint32_t gpu_only_lock(ComObj *s) {
+    if (s->lock_count++ == 0) {
+        s->pixels = heap_alloc(s->pixels_bytes, !s->gpu_written, 16);
+        if (!s->pixels) {
+            s->lock_count = 0;
+            return 0;
+        }
+        if (s->gpu_written) {
+            const HostD9Surface r = surface_ref(s);
+            host_d9_texture_read(r.id, r.face, r.level, gm_ptr(s->pixels), s->pitch);
+        }
+    }
+    return s->pixels;
+}
+static void gpu_only_unlock(ComObj *s) {
+    if (s->lock_count <= 0 || --s->lock_count)
+        return;
+    uint32_t slot;
+    ComObj *tex = com_get(mirror_slot(s, &slot));
+    if (tex && tex->kind == K_D3D9TEXTURE) {
+        GpuMirror &m = gpu_define(tex);
+        if (tex->gpu_reads_back < 0)
+            tex->gpu_reads_back = host_d9_texture_reads_back(tex->id) ? 1 : 0;
+        if (tex->gpu_reads_back == 1) {
+            const HostD9Surface r = surface_ref(s);
+            host_d9_texture_upload(r.id, r.face, r.level, gm_ptr(s->pixels), s->pitch);
+            s->gpu_written = true;
+            if (slot < m.cpu_dirty.size())
+                m.cpu_dirty[slot] = 0;
+            heap_free(s->pixels);
+            s->pixels = 0;
+            return;
+        }
+    }
+    // The renderer would not give the bytes back as they were: every level of the texture keeps its copy here.
+    for (uint32_t id : tex ? tex->surfaces : std::vector<uint32_t>{s->id})
+        if (ComObj *l = com_get(id)) {
+            l->gpu_only = false;
+            l->blob.assign(l->pixels_bytes, 0);
+        }
+    memcpy(s->blob.data(), gm_ptr(s->pixels), s->blob.size());
+    heap_free(s->pixels);
+    s->pixels = 0;
+    d9_raster_invalidate(s->id);
+    gpu_after_unlock(s, 0, (uint32_t)s->blob.size());
+}
+
 // Uploads every slot the game changed since the GPU last saw it.
 static void gpu_sync(ComObj *o) {
     if (!o)
@@ -2081,6 +2137,14 @@ void Dev_CreateTexture(X86 *c) {
         tex->surfaces.push_back(s->id);
     }
     tex->back_obj = tex->surfaces.empty() ? 0 : tex->surfaces[0];
+    // A managed texture that is only sampled (Gothic 3's images, eCGfxImageData::Read 102f2f40) keeps its levels on
+    // the GPU alone: the shim's copy of every level was a second full copy in host memory.
+    if (arg(c, 6) == 1 && !(usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL | 0x200u)) && gpu_on())
+        for (uint32_t id : tex->surfaces)
+            if (ComObj *s = com_get(id)) {
+                s->gpu_only = true;
+                std::vector<uint8_t>().swap(s->blob);
+            }
     uint32_t view_ = com_view(tex, IF_D3DTEXTURE9);
     if (!view_) {
         com_release(tex);

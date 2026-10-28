@@ -307,6 +307,11 @@ struct ComObj {
     uint32_t stage_kept = 0;
     // That copy was unlocked since the blob last matched it: the blob is current only in [fresh_lo, fresh_hi).
     bool stage_stale = false;
+    // D3D9 level of a managed, only sampled texture (Gothic 3 session 22): no blob, the GPU's copy is the only one.
+    // A lock hands the guest a buffer (zeros, or the GPU's bytes once written), the unlock uploads it and frees it.
+    // pixels_bytes is the level's size. On the texture: whether the renderer gives its bytes back (-1 not asked yet).
+    bool gpu_only = false, gpu_written = false;
+    int8_t gpu_reads_back = -1;
     uint32_t fresh_lo = 0, fresh_hi = 0;
     // Once handed a writable Lock pointer, the guest may keep using it forever.
     bool retained_pointer = false;

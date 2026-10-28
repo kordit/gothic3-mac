@@ -50,6 +50,9 @@ void host_d9_texture_upload(uint32_t id, uint32_t face, uint32_t level, const ui
 // only). Waits for the GPU. Non-zero on success.
 int host_d9_texture_read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes,
                          uint32_t pitch);
+// Non-zero when host_d9_texture_read returns every face/level of the texture exactly as uploaded (its format is
+// stored as is, at the game's size, in memory the CPU can read): the GPU's copy can be the only one.
+int host_d9_texture_reads_back(uint32_t id);
 
 // A bounded read for D3D9 GetRenderTargetData + LockRect(D3DLOCK_DONOTWAIT): queues a copy of a
 // colour face/level (direct 32-bit formats) behind the work already handed to the renderer and

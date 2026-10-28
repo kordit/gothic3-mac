@@ -1684,6 +1684,15 @@ class Renderer final : public D9Backend {
         }
     }
 
+    bool reads_back(uint32_t id) override {
+        auto it = textures_.find(id);
+        if (it == textures_.end() || !it->second.texture)
+            return false;
+        const Tex &t = it->second;
+        return t.desc.kind == HOST_D9_TEX_2D && t.info.conv == Conv::Direct && t.scale == 1.0f && !t.promoted &&
+               !t.msaa && t.texture.storageMode != MTLStorageModePrivate &&
+               t.texture.mipmapLevelCount >= std::max<uint32_t>(t.desc.levels, 1);
+    }
     bool read(uint32_t id, uint32_t face, uint32_t level, uint8_t *bytes, uint32_t pitch) override {
         auto it = textures_.find(id);
         if (it == textures_.end() || !it->second.texture)
@@ -1694,7 +1703,9 @@ class Renderer final : public D9Backend {
         const bool volume = t.desc.kind == HOST_D9_TEX_VOLUME;
         if (face >= (volume ? std::max(t.desc.depth >> level, 1u) : t.cube ? 6u : 1u))
             return false;
-        if (t.texture.storageMode == MTLStorageModePrivate || t.info.block)
+        // A block format reads back as its blocks when it is stored as such (Gothic 3 session 22: a managed DXT
+        // texture's levels live only here, and D3DX locks level 0 again to filter the mips).
+        if (t.texture.storageMode == MTLStorageModePrivate || (t.info.block && t.info.conv != Conv::Direct))
             return false;
         settle(t.used);
         if (t.promoted)   // PLAN_R2 item 10: the float back buffer read as the guest's 8-bit bytes
