@@ -18,3 +18,5 @@ for n in ("wait yield", "wait cs", "bg load"):
     if v:
         print("  slow frame %-10s max %.1f ms, mediana %.1f ms (%d linii)" % (n, max(v), statistics.median(v), len(v)))
 print("  crash/abort:", len(re.findall(r"SIGSEGV|SIGBUS|abort|fatal", text)))
+# The navigation's freed class name (session 18): every NPC path query warns while it lasts.
+print("  nawigacja, ostrzeżenia QueryNewObject:", text.count("can not find rootobject"))
