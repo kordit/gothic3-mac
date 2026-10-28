@@ -18,7 +18,10 @@
  *   read by the render, so MemHeap::Free (10020090) and FreeShortUsage (10020470) from the logic thread are queued
  *   meanwhile and run after the join, by the main thread, through the translated originals with the argument and a
  *   return address pushed (guest_call would set up a longjmp record each time).
- * - The kit's heap has a lock (memory.cpp), rtti.c's table a sequence count, the frame phases a lock. */
+ * - The kit's heap has a lock (memory.cpp), rtti.c's table a sequence count, the frame phases a lock. Every other
+ *   free of the logic thread (HeapFree, the CRTs' free and delete: the kit's heap) is queued too while it runs
+ *   (recomp_heap_defer) and made after the join: a block the render still reads is not handed out again. A
+ *   destructor still changes the object before its free, so this narrows the race, it does not close it. */
 #include "chunk.h"
 
 #include <pthread.h>
@@ -38,6 +41,8 @@ bool recomp_exit_pending(void);
 void fn_10020090(X86 *c); /* SharedBase MemHeap::Free(void *), stdcall, RET 4 */
 void fn_10020470(X86 *c); /* SharedBase MemHeap::FreeShortUsage(void *), stdcall, RET 4 */
 void g3_process_body(X86 *c); /* mods.c: Process as it runs without the mode */
+void recomp_heap_defer(bool on);       /* kit memory.cpp */
+size_t recomp_heap_defer_flush(void);
 
 #define PIPE_MAGIC 0x50495045u     /* "PIPE": the logic thread's start parameter */
 #define PIPE_PROCESS_RET 0x1027677cu /* OnRun, after CALL Process */
@@ -63,6 +68,37 @@ static size_t pipe_qn, pipe_qcap;
 
 static uint64_t pipe_now(void) {
     return clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+}
+
+/* When the logic may run beside the render: only in a world that has run settled for a while. Both fights of
+ * 28.10 fell over (the render list's sort, Engine 10565023) in the frame the new game's world was being built
+ * beside a render; a menu, a load and the first seconds after one run the old way, Process then DoRender. Settled:
+ * PIPE_SETTLED frames in a row none of which took PIPE_SLOW_NS, and the logic's own time above PIPE_WORLD_NS (a
+ * menu's logic takes about 0.25 ms, a world's 1.2 ms and more). RECOMP_G3_PIPE_GATE=0 runs every frame beside. */
+#define PIPE_SETTLED 600u
+#define PIPE_SLOW_NS 100000000ull
+#define PIPE_WORLD_NS 800000ull
+static uint64_t pipe_last_ns, pipe_logic_ema;
+static unsigned pipe_settled;
+static int pipe_gate = -1;
+
+void g3_pipe_note_logic(uint64_t ns) {
+    pipe_logic_ema = pipe_logic_ema ? (pipe_logic_ema * 15u + ns) / 16u : ns;
+}
+
+static int pipe_allowed(void) {
+    if (pipe_gate < 0) {
+        const char *e = getenv("RECOMP_G3_PIPE_GATE");
+        pipe_gate = !(e && *e == '0');
+    }
+    const uint64_t now = pipe_now();
+    const uint64_t dt = pipe_last_ns ? now - pipe_last_ns : 0;
+    pipe_last_ns = now;
+    if (dt > PIPE_SLOW_NS)
+        pipe_settled = 0;
+    else if (pipe_settled < PIPE_SETTLED)
+        ++pipe_settled;
+    return !pipe_gate || (pipe_settled >= PIPE_SETTLED && pipe_logic_ema > PIPE_WORLD_NS);
 }
 
 int g3_pipe_on(void) {
@@ -108,7 +144,11 @@ static void pipe_logic_loop(X86 *c) {
         c->r[R_ESP] = esp - 4u;
         wr32(esp - 4u, PIPE_PROCESS_RET);
         c->r[R_ECX] = app;
+        recomp_heap_defer(true);
+        const uint64_t t0 = pipe_now();
         g3_process_body(c); /* its RET pops the return address */
+        g3_pipe_note_logic(pipe_now() - t0);
+        recomp_heap_defer(false);
         c->r[R_ESP] = esp;
         pthread_mutex_lock(&pipe_m);
         pipe_done = 1;
@@ -162,6 +202,8 @@ int g3_pipe_process(X86 *c) {
         return 1;
     }
     if (pipe_on_logic || rd32(esp) != PIPE_PROCESS_RET)
+        return 0;
+    if (!pipe_allowed())
         return 0;
     if (!pipe_started) {
         pipe_started = 1;
@@ -224,6 +266,7 @@ void g3_pipe_render_end(X86 *c) {
         pipe_run_free(c, pipe_q[i].fn, pipe_q[i].ptr);
     pipe_deferred += pipe_qn;
     pipe_qn = 0;
+    pipe_deferred += recomp_heap_defer_flush();
     memcpy(c->r, saved, sizeof saved);
     if (++pipe_frames % 600u == 0u)
         fprintf(stderr, "[g3] pipe: %llu frames, the render waited %.2f ms a frame for the logic, %llu frees deferred\n",

@@ -1350,6 +1350,8 @@ uint64_t g3_phase_now(void);                    /* phases.c */
 void g3_phase(const char *name, uint64_t t0);  /* phases.c */
 
 int g3_pipe_process(X86 *c); /* pipe.c: stage 5, RECOMP_G3_PIPE=1 */
+int g3_pipe_on(void);
+void g3_pipe_note_logic(uint64_t ns);
 
 /* Process as it runs without stage 5; with it, on the logic thread (pipe.c). */
 void g3_process_body(X86 *c) {
@@ -1361,8 +1363,12 @@ void g3_process_body(X86 *c) {
 }
 
 void g3n_10276490(X86 *c) {
-    if (!g3_pipe_process(c))
+    if (!g3_pipe_process(c)) {
+        const uint64_t t0 = g3_phase_now();
         g3_process_body(c);
+        if (g3_pipe_on())
+            g3_pipe_note_logic(g3_phase_now() - t0);
+    }
 }
 
 #define STR_TEXT 0x10005680u          /* bCString::GetText(void) const */
