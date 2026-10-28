@@ -123,6 +123,7 @@ def render_header(cfg):
     lines.append("#define RECOMP_LAUNCHER_GOG_IDS %s" % c_string_list(launcher["gog_ids"]))
     lines.append("#define RECOMP_LAUNCHER_STEAM_IDS %s" % c_string_list(launcher["steam_ids"]))
     lines.append("#define RECOMP_LAUNCHER_NATIVE_DLLS %s" % c_string_list(launcher["native_dlls"]))
+    lines.append("#define RECOMP_LAUNCHER_NATIVE_MOD_DLLS %s" % c_string_list(launcher["native_mod_dlls"]))
     lines.append("#define RECOMP_LAUNCHER_MIN_FREE_MB %du" % launcher["min_free_mb"])
     lines.append("#define RECOMP_LAUNCHER_SEFARIS_DIR %s" % c_string(launcher["sefaris_dir"]))
     lines.append("#define RECOMP_LAUNCHER_LANGUAGE %s" % c_string(launcher["language"]))

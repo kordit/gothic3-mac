@@ -1517,6 +1517,13 @@ void test_mod_rules() {
     CHECK(!mod_toggle(cat, &sel, "Last").empty() && !sel.enabled("Last"));
     // Not supported yet, or a dependency the catalog lacks: nothing changes.
     CHECK(!mod_toggle(cat, &sel, "Auto").empty() && !sel.enabled("Auto"));
+    // Its DLL redone natively for the player to switch ([launcher] native_mod_dlls): enabled as any other.
+    ModCatalog native = cat;
+    native.mods[size_t(native.find("Auto"))].native = true;
+    ModSelection with = sel;
+    CHECK(mod_toggle(native, &with, "Auto").empty() && with.enabled("Auto"));
+    CHECK(mod_active(native, with).size() == with.ids.size());
+    CHECK(mod_problems(native, with).empty());
     CHECK(mod_toggle(cat, &sel, "Plain").find("Missing") != std::string::npos);
     CHECK(!sel.enabled("Plain") && sel.ids.size() == 2);
     CHECK(mod_problems(cat, sel).empty());

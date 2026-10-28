@@ -69,6 +69,8 @@ void Launcher::load_mods(const std::string &root) {
         const std::string base = lower(slash == std::string::npos ? m.script_dll : m.script_dll.substr(slash + 1));
         for (const std::string &n : spec_.native_dlls)
             m.builtin = m.builtin || lower(n) == base;
+        for (const std::string &n : spec_.native_mod_dlls)
+            m.native = m.native || lower(n) == base;
     }
     mods_loaded_ = true;
     mod_root_ = root;

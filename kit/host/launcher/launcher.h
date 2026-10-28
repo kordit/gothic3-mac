@@ -24,6 +24,9 @@ struct Spec {
     std::string mod_root;
     // Script_*.dll names the port has redone natively ([launcher] native_dlls): such a mod is built in.
     std::vector<std::string> native_dlls;
+    // Script_*.dll names the port has redone natively for the player to switch ([launcher] native_mod_dlls):
+    // such a mod is enabled like one without a DLL.
+    std::vector<std::string> native_mod_dlls;
     // The launcher's look ([launcher] in game.toml). language "pl" shows
     // Polish; banner is the big title (default: title); the fonts are
     // "path" or "path#face" (a .ttc), a relative path inside the game folder;

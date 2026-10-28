@@ -336,8 +336,9 @@ def load(game_dir):
     launcher.setdefault("title", game["name"])
     launcher.setdefault("store", "")
     # Gothic 3: the Script_*.dll names (no folder, any case) the port has redone as native code; a mod
-    # holding one is shown as built in and always on instead of "needs a DLL".
-    for key in ("install_names", "gog_ids", "steam_ids", "native_dlls"):
+    # holding one is shown as built in and always on instead of "needs a DLL". native_mod_dlls: the same, but the
+    # player switches the mod on and off like any other (the native code reads its id in active-mods.json).
+    for key in ("install_names", "gog_ids", "steam_ids", "native_dlls", "native_mod_dlls"):
         value = launcher.setdefault(key, [])
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise ValueError("%s: [launcher] %s must be a list of strings" % (source, key))

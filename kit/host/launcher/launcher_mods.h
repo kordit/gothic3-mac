@@ -26,8 +26,11 @@ struct ModInfo {
     // That DLL is one the port has redone as native code ([launcher] native_dlls): the mod runs
     // always, without its DLL, and the launcher shows it as built in rather than blocked.
     bool builtin = false;
+    // That DLL is one the port has redone natively for the player to switch ([launcher]
+    // native_mod_dlls): the mod is enabled like one without a DLL, and its DLL is never loaded.
+    bool native = false;
     bool supported() const {
-        return script_dll.empty();
+        return script_dll.empty() || native;
     }
 };
 

@@ -38,6 +38,10 @@ const Spec &spec_from_config() {
         static const char *const native[] = RECOMP_LAUNCHER_NATIVE_DLLS;
         s.native_dlls = strings(native);
 #endif
+#ifdef RECOMP_LAUNCHER_NATIVE_MOD_DLLS
+        static const char *const native_mod[] = RECOMP_LAUNCHER_NATIVE_MOD_DLLS;
+        s.native_mod_dlls = strings(native_mod);
+#endif
         s.min_free_bytes = uint64_t(RECOMP_LAUNCHER_MIN_FREE_MB) * 1024 * 1024;
 #ifdef RECOMP_LAUNCHER_SEFARIS_DIR
         s.mod_root = RECOMP_LAUNCHER_SEFARIS_DIR;
