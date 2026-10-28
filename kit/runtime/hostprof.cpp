@@ -20,6 +20,9 @@
 // to <prefix>-spike-<n>-<ms>.txt, from the sampler thread so the game does not wait. At most SPIKE_FILES files or
 // SPIKE_BYTES in all: the first cap, 60 files, was spent on the menu and the loading screen before the player had
 // walked two minutes (Gothic 3 session 19). A loading screen's frame writes a few MB, a stutter in play tens of KB.
+// Every second tick it samples the other guest threads too, and a slow frame writes each one's stacks to
+// <prefix>-thr-<n>-<ms>-<guest thread id>-<start routine>.txt: what the thread holding the baton did while the game
+// thread waited for it, and what a free thread (fmodex's mixer) did while it fell behind (Gothic 3 session 21).
 #include "hostprof.h"
 
 #include "../platform/os.h"
@@ -49,6 +52,15 @@ struct Stack {
         return memcmp(pc, o.pc, sizeof pc) < 0;
     }
 };
+struct Other {
+    uint32_t id = 0, start = 0; // guest thread id, start routine
+    std::map<Stack, uint64_t> counts;
+};
+struct Spike {
+    double ms;
+    std::map<Stack, uint64_t> frame;
+    std::map<uint64_t, Other> others; // by host thread
+};
 struct State {
     std::mutex mutex;
     std::map<Stack, uint64_t> counts;
@@ -56,7 +68,8 @@ struct State {
     // spike mode: the presenting thread, the frame's stacks, frames waiting to be written
     std::atomic<uint64_t> game_thread{0};
     std::map<Stack, uint64_t> frame;
-    std::vector<std::pair<double, std::map<Stack, uint64_t>>> pending;
+    std::map<uint64_t, Other> others;
+    std::vector<Spike> pending;
     unsigned spikes = 0;
     std::atomic<uint64_t> spike_bytes{0};
 };
@@ -111,25 +124,53 @@ bool sample(pthread_t thread, Stack &out) {
 
 void write_spikes() {
     auto &s = state();
-    std::vector<std::pair<double, std::map<Stack, uint64_t>>> todo;
+    std::vector<Spike> todo;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         todo.swap(s.pending);
     }
     for (const auto &spike : todo) {
+        const unsigned n = s.spikes++;
         char path[1024];
-        snprintf(path, sizeof path, "%s-spike-%u-%.0f.txt", prefix(), s.spikes++, spike.first);
+        snprintf(path, sizeof path, "%s-spike-%u-%.0f.txt", prefix(), n, spike.ms);
         if (FILE *f = fopen(path, "w")) {
-            write_stacks(f, spike.second);
+            write_stacks(f, spike.frame);
             s.spike_bytes += (uint64_t)ftell(f);
             fclose(f);
         }
+        for (const auto &kv : spike.others) {
+            snprintf(path, sizeof path, "%s-thr-%u-%.0f-%u-%08x.txt", prefix(), n, spike.ms, kv.second.id,
+                     kv.second.start);
+            if (FILE *f = fopen(path, "w")) {
+                write_stacks(f, kv.second.counts);
+                s.spike_bytes += (uint64_t)ftell(f);
+                fclose(f);
+            }
+        }
+    }
+}
+
+// The guest threads other than the presenting one, into this frame's stacks.
+void sample_others(State &s, uint64_t game) {
+    OsThreadId tids[64];
+    uint32_t ids[64], starts[64];
+    const size_t n = sched_guest_threads_host(tids, ids, starts, 64);
+    for (size_t i = 0; i < n; ++i) {
+        Stack stack;
+        if (tids[i] == game || !sample((pthread_t)(uintptr_t)tids[i], stack))
+            continue;
+        std::lock_guard<std::mutex> lock(s.mutex);
+        Other &o = s.others[tids[i]];
+        o.id = ids[i];
+        o.start = starts[i];
+        ++o.counts[stack];
     }
 }
 
 void run_spikes() {
     auto &s = state();
     auto next = std::chrono::steady_clock::now();
+    unsigned tick = 0;
     for (;;) {
         next += std::chrono::milliseconds(1);
         std::this_thread::sleep_until(next);
@@ -139,6 +180,8 @@ void run_spikes() {
             std::lock_guard<std::mutex> lock(s.mutex);
             ++s.frame[stack];
         }
+        if (++tick % 2 == 0)
+            sample_others(s, thread);
         write_spikes();
         auto now = std::chrono::steady_clock::now();
         if (now > next + std::chrono::milliseconds(1))
@@ -252,8 +295,9 @@ void hostprof_frame(double frame_ms) {
     s.game_thread.store((uint64_t)(uintptr_t)pthread_self(), std::memory_order_release);
     std::lock_guard<std::mutex> lock(s.mutex);
     if (frame_ms >= spike_ms() && s.spikes + s.pending.size() < SPIKE_FILES && s.spike_bytes < SPIKE_BYTES)
-        s.pending.emplace_back(frame_ms, std::move(s.frame));
+        s.pending.push_back({frame_ms, std::move(s.frame), std::move(s.others)});
     s.frame.clear();
+    s.others.clear();
 }
 
 void hostprof_report() {

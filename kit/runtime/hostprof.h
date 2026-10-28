@@ -16,3 +16,6 @@ void sched_hold_report();
 void sched_note_present();
 // The host thread that holds the guest baton now, 0 when none (kernel32.cpp).
 OsThreadId sched_current_holder_host();
+// Every live guest thread that has a host thread, at most `max`: its host thread, guest thread id and start routine
+// (0 for the main thread). Returns the count (kernel32.cpp).
+size_t sched_guest_threads_host(OsThreadId *tids, uint32_t *ids, uint32_t *starts, size_t max);

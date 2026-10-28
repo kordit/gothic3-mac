@@ -2296,6 +2296,19 @@ OsThreadId sched_current_holder_host() {
     g_sched_m.unlock();
     return t;
 }
+size_t sched_guest_threads_host(OsThreadId *tids, uint32_t *ids, uint32_t *starts, size_t max) {
+    size_t n = 0;
+    g_sched_m.lock();
+    for (const GuestThread *t : threads())
+        if (n < max && t->tid && !t->finished) {
+            tids[n] = t->tid;
+            ids[n] = t->id;
+            starts[n] = t->start;
+            ++n;
+        }
+    g_sched_m.unlock();
+    return n;
+}
 ProfileSlot *sched_current_holder_slot() {
     g_sched_m.lock();
     auto it = profile_slots().find(g_baton);
