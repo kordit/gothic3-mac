@@ -94,9 +94,12 @@ void g3n_1026c3e0(X86 *c) {
     const uint32_t setup = rd32(c->r[R_ESP] + 4u);
     fn_1026c3e0(c);
     if (G3OPT(LOAD) && rd32(setup + LD_SETUP_IMAGE_THREADS) == 0u) {
-        wr32(setup + LD_SETUP_IMAGE_THREADS, LD_IMAGE_THREADS);
+        /* G3_LOAD_THREADS=<n> (1-4): another count, for a measurement. */
+        const char *e = getenv("G3_LOAD_THREADS");
+        const uint32_t n = e && atoi(e) >= 1 && atoi(e) <= 4 ? (uint32_t)atoi(e) : LD_IMAGE_THREADS;
+        wr32(setup + LD_SETUP_IMAGE_THREADS, n);
         ld_pool = 1;
-        fprintf(stderr, "[g3] load: the image cache gets %u loader thread\n", LD_IMAGE_THREADS);
+        fprintf(stderr, "[g3] load: the image cache gets %u loader thread%s\n", n, n == 1 ? "" : "s");
     }
 }
 

@@ -34,15 +34,17 @@ void g3_phase(const char *name, uint64_t t0) {
 void g3_load_frame(void); /* loading.c */
 int g3_pipe_render_begin(void); /* pipe.c */
 void g3_pipe_render_end(X86 *c);
-extern uint64_t g3_load_deferred, g3_load_queued;
+extern uint64_t g3_load_deferred, g3_load_queued, g3_load_fallback;
 
 void g3n_10276100(X86 *c) {
     g3_game_thread = pthread_self();
     g3_load_frame();
     static uint64_t frames, told_deferred;
     if (++frames % 600u == 0u && g3_load_deferred != told_deferred) {
-        fprintf(stderr, "[g3] load: %llu texture binds without their image so far, %llu images queued\n",
-                (unsigned long long)g3_load_deferred, (unsigned long long)g3_load_queued);
+        fprintf(stderr, "[g3] load: %llu texture binds without their image so far, %llu images queued, %llu bound in "
+                        "the draw after waiting\n",
+                (unsigned long long)g3_load_deferred, (unsigned long long)g3_load_queued,
+                (unsigned long long)g3_load_fallback);
         told_deferred = g3_load_deferred;
     }
     const uint64_t t0 = g3_phase_now();
