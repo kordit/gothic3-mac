@@ -2132,6 +2132,9 @@ std::mutex g_sched_m;
 std::condition_variable_any g_sched_cv;
 size_t g_baton = 0; // index of the thread allowed to run
 uint32_t g_free_cs_waiters = 0; // free threads parked on g_sched_cv for a critical section (under g_sched_m)
+// Threads waiting for any critical section: a batoned one from sched_enter_critsec until the scheduler grants it, a
+// free one while it is parked. A leave that finds nobody counted takes no lock (critsec_try_take).
+std::atomic<uint32_t> g_cs_waiting{0};
 // Read by the host from the very thread that sets it, so a plain bool is the
 // whole of it: no other thread looks.
 bool g_in_idle_slice = false;
@@ -2781,6 +2784,36 @@ void critsec_take(uint32_t cs, uint32_t tid) {
     wr32(cs + CS_OFF_LOCK_COUNT, rec); // LockCount is recursion - 1
 }
 
+// Takes the section for tid, false when another thread owns it. A 4-byte aligned section's owner word is taken
+// with a compare-and-swap, so an enter or leave with nobody waiting needs no g_sched_m: every one of them took it,
+// and in a Gothic 3 fight the main thread waited for it (FMOD's free threads, the scheduler) in 1.3% of its
+// samples. Waiting still goes through g_sched_m: a waiter is counted in g_cs_waiting before its last try, and a
+// leave clears the owner before it reads the count (both sequentially consistent), so one of them sees the other.
+// An unaligned section is taken as before, by the caller holding g_sched_m.
+bool critsec_try_take(uint32_t cs, uint32_t tid) {
+    if (!cs || !gm_valid(cs, 24))
+        return true;
+    if (cs & 3u) {
+        if (!critsec_available(cs, tid))
+            return false;
+        critsec_take(cs, tid);
+        return true;
+    }
+    uint32_t *owner = (uint32_t *)(g_mem + cs + CS_OFF_OWNER);
+    if (__atomic_load_n(owner, __ATOMIC_ACQUIRE) == tid) {
+        const uint32_t rec = rd32(cs + CS_OFF_RECURSION);
+        wr32(cs + CS_OFF_RECURSION, rec + 1);
+        wr32(cs + CS_OFF_LOCK_COUNT, rec);
+        return true;
+    }
+    uint32_t free_ = 0;
+    if (!__atomic_compare_exchange_n(owner, &free_, tid, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST))
+        return false;
+    wr32(cs + CS_OFF_RECURSION, 1);
+    wr32(cs + CS_OFF_LOCK_COUNT, 0);
+    return true;
+}
+
 // Caller holds g_sched_m.  Can this blocked thread's wait complete now?  If it
 // can, the wait is taken here and the thread becomes runnable, so one signal
 // releases exactly one waiter.
@@ -2809,9 +2842,9 @@ bool sched_satisfy_locked(GuestThread *t) {
             t->wait_result = (ab ? 0x80u : 0u) + hit;
         }
     } else if (t->wait_kind == W_CRITSEC) {
-        if (!critsec_available(t->wait_cs, t->id))
+        if (!critsec_try_take(t->wait_cs, t->id))
             return false;
-        critsec_take(t->wait_cs, t->id);
+        g_cs_waiting.fetch_sub(1, std::memory_order_seq_cst);
         t->wait_result = 0;
     } else if (t->wait_kind == W_NONE && t->has_deadline) {
         return false; // a plain sleep: only time releases it
@@ -3544,9 +3577,12 @@ uint32_t sched_wait_objects(const uint32_t *handles_, uint32_t count, bool wait_
 
 void sched_enter_critsec(uint32_t cs) {
     GuestThread *me = cur_thread();
+    if (!(cs & 3u) && critsec_try_take(cs, me->id))
+        return;
     g_sched_m.lock();
-    if (critsec_available(cs, me->id)) {
-        critsec_take(cs, me->id);
+    g_cs_waiting.fetch_add(1, std::memory_order_seq_cst);
+    if (critsec_try_take(cs, me->id)) {
+        g_cs_waiting.fetch_sub(1, std::memory_order_seq_cst);
         g_sched_m.unlock();
         return;
     }
@@ -3561,10 +3597,10 @@ void sched_enter_critsec(uint32_t cs) {
 
 bool sched_try_critsec(uint32_t cs) {
     GuestThread *me = cur_thread();
+    if (!(cs & 3u))
+        return critsec_try_take(cs, me->id);
     g_sched_m.lock();
-    bool got = critsec_available(cs, me->id);
-    if (got)
-        critsec_take(cs, me->id);
+    bool got = critsec_try_take(cs, me->id);
     g_sched_m.unlock();
     return got;
 }
@@ -3573,6 +3609,28 @@ void sched_leave_critsec(uint32_t cs) {
     if (!cs || !gm_valid(cs, 24))
         return;
     GuestThread *me = cur_thread();
+    if (!(cs & 3u)) {   // critsec_try_take: no lock unless someone waits
+        if (rd32(cs + CS_OFF_OWNER) != me->id) {
+            std::lock_guard<std::mutex> lk(g_sched_m);   // log_once's set, as on the locked path
+            log_once("critsec-not-owner",
+                     "LeaveCriticalSection(%08x) from thread %u, which does not own it", cs, me->id);
+            return;
+        }
+        uint32_t rec = rd32(cs + CS_OFF_RECURSION);
+        if (rec)
+            --rec;
+        wr32(cs + CS_OFF_RECURSION, rec);
+        wr32(cs + CS_OFF_LOCK_COUNT, rec ? rec - 1 : 0xffffffffu);
+        if (rec)
+            return;
+        __atomic_store_n((uint32_t *)(g_mem + cs + CS_OFF_OWNER), 0u, __ATOMIC_SEQ_CST);
+        if (g_cs_waiting.load(std::memory_order_seq_cst)) {
+            g_sched_m.lock();
+            g_sched_cv.notify_all();
+            g_sched_m.unlock();
+        }
+        return;
+    }
     g_sched_m.lock();
     if (rd32(cs + CS_OFF_OWNER) != me->id) {
         // Leaving a section this thread does not own is a guest bug; Windows
@@ -6110,13 +6168,16 @@ extern "C" bool recomp_cur_is_main_thread() {
 
 void sched_free_enter_critsec(uint32_t cs) {
     GuestThread *me = cur_thread();
+    if (!(cs & 3u) && critsec_try_take(cs, me->id))
+        return;
     g_sched_m.lock();
-    while (!critsec_available(cs, me->id)) {
+    g_cs_waiting.fetch_add(1, std::memory_order_seq_cst);
+    while (!critsec_try_take(cs, me->id)) {
         ++g_free_cs_waiters;
         g_sched_cv.wait_for(g_sched_m, std::chrono::milliseconds(2));
         --g_free_cs_waiters;
     }
-    critsec_take(cs, me->id);
+    g_cs_waiting.fetch_sub(1, std::memory_order_seq_cst);
     g_sched_m.unlock();
 }
 
