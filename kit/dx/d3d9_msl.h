@@ -108,6 +108,11 @@ struct PixelVariant {
     // depth on Apple GPUs (the run-27 global patch put a discard in every pixel shader). The text is run 27's. Applied
     // last (after mipbias); a program without the anchors stays unpatched (as before).
     uint8_t fade = 0;
+    // Gothic 3 soft particles (session 17): a draw that samples its own colour target reads it from the tile instead
+    // of a copy: (stage + 1) | rt << 5, every lookup of that stage becomes the attachment's value at this pixel
+    // ([[color(rt)]], fbfetch_patch). The host sets it only where fbfetch_coords found every lookup at the pixel's own
+    // position and the draw's constants make it exactly that texel. 0: unchanged source.
+    uint8_t fbfetch = 0;
     // Remaster run 13 natural glass (MSL only): 1 = the building-glass effect's reflection add (reflection x mask +
     // lit colour) becomes Schlick-weighted per pixel (N from t5, V from t6: pair it with VertexVariant glass). Unchanged
     // source when 0; pixel_source fails if the patch does not apply. 2 (Xbox 360 mode, glass_patch_x360) = the 360 window
@@ -197,7 +202,8 @@ struct PixelVariant {
                ((uint64_t)pool * 0x85ebca77c2b2ae63ull) ^
                ((uint64_t)pbrworld * 0xd6e8feb86659fd93ull) ^ ((uint64_t)roadsheen * 0xa0761d6478bd642full) ^
                ((uint64_t)facadeglint * 0x9fb21c651e98df25ull) ^ ((uint64_t)fade * 0x7a5b9c3e2d1f4e6bull) ^ ((uint64_t)glass * 0xe7037ed1a0b428dbull) ^
-               ((uint64_t)water * 0x1d8e4e27c47d124full) ^ ((uint64_t)fefloor * 0x510e527fade682d1ull);
+               ((uint64_t)water * 0x1d8e4e27c47d124full) ^ ((uint64_t)fefloor * 0x510e527fade682d1ull) ^
+               ((uint64_t)fbfetch * 0x94d049bb133111ebull);
     }
 };
 // Remaster run 10: also write the pool varyings (object-space position, normal, uv, tangent: the raw POSITION0,
@@ -336,6 +342,21 @@ SunFlow vertex_sun_flow(const d9sh::Program &p);
 constexpr uint32_t kPbrWorldCounters = 48;
 bool pixel_source(const d9sh::Program &p, const PixelVariant &v, std::string *out,
                   std::string *why);
+
+// PixelVariant::fbfetch: how one stage's lookups find their coordinate, read from the program's MSL (pixel_source with
+// the default variant). Each lookup of the stage must be "r[N] = (txS.sample(smS, ((r[N].xyzw)).xy));" right after
+// r[N].xy is made from the pixel position alone, as Gothic 3's soft particles do (VPOS):
+//   kind 0: r[N].xy = c[k].xy * (vpos - 0.5)                        (the draw's c[k].xy must be 1 / target size)
+//   kind 1: r[N].xy = (c[k].<comp> + (vpos - 0.5)) * c[m].xy          (c[m].xy = 1 / target size, 0 <= c[k].<comp> < 1)
+// so the lookup reads the texel under the pixel. False when any lookup of the stage is otherwise.
+struct FbFetchCoord {
+    uint8_t kind = 0, comp = 0;
+    uint16_t k = 0, m = 0;
+};
+bool fbfetch_coords(const std::string &src, int stage, std::vector<FbFetchCoord> *out);
+// The variant's text: every lookup of the stage becomes d9_fb<rt>, a [[color(rt)]] input of ps_main. False when the
+// lookups are not as fbfetch_coords requires.
+bool fbfetch_patch(std::string *s, int stage, int rt);
 
 // The stages a pixel shader samples, for the host's texture binding.
 uint32_t pixel_sampler_mask(const d9sh::Program &p);

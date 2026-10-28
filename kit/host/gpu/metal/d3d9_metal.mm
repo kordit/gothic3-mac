@@ -2777,6 +2777,7 @@ class Renderer final : public D9Backend {
         }
         if (d.render_state[243] && d9_fade_on())   // run 27 scenery fade-in, run 29 as a variant (O1)
             variant.fade = 1;
+        variant.fbfetch = fb_fetch_;   // session 17: fb_prepare's read of the draw's own target from the tile
         for (uint32_t s = 0; s < 16; ++s) {
             Tex *t = d.sampler_texture[s] ? tex_ptr(d.sampler_texture[s]) : nullptr;
             bound[s] = t;
@@ -7269,12 +7270,17 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     std::unordered_map<uint32_t, FbShadow> fb_shadow_;
     uint32_t fb_valid_ = 0, fb_sampled_ = 0;   // shadows in use; this draw's sampled colour targets (bits)
     uint64_t fb_copies_ = 0;
-    void fb_invalidate(uint32_t tid) {
+    // RECOMP_D3D9_GPU_PASSES=1: the pixel shaders whose draws made a copy, and those whose draws invalidated one
+    // (the copied target's index in the key's low bits), reported with the passes.
+    std::map<std::pair<uint64_t, int>, uint64_t> fb_copy_by_ps_, fb_inval_by_ps_;
+    bool fb_invalidate(uint32_t tid) {
         auto it = fb_shadow_.find(tid);
         if (it != fb_shadow_.end() && it->second.valid) {
             it->second.valid = false;
             --fb_valid_;
+            return true;
         }
+        return false;
     }
     void fb_frame_end() {
         for (auto &kv : fb_shadow_)
@@ -7285,8 +7291,57 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         auto it = fb_shadow_.find(tid);
         return it != fb_shadow_.end() && it->second.valid ? it->second.tex : nil;
     }
+    // Session 17: a target the draw reads only at its own pixel (fbfetch_coords) is read from the tile
+    // (PixelVariant::fbfetch) instead of a copy, so the pass goes on. Per program and stage: the lookups' coordinates,
+    // or none when they are not all at the pixel. RECOMP_D3D9_FB_FETCH=0 copies as before.
+    std::unordered_map<uint64_t, std::pair<bool, std::vector<d9msl::FbFetchCoord>>> fbf_coords_;
+    uint8_t fb_fetch_ = 0;   // this draw's PixelVariant::fbfetch
+    uint64_t fb_fetches_ = 0;
+    bool fb_fetch_ok(const HostD9Draw &d, uint64_t key, const d9sh::Program &p, int stage, const Tex &ct) {
+        static const bool off = [] { const char *e = recomp_env("D3D9_FB_FETCH"); return e && *e == '0'; }();
+        if (off || (d.projected_mask >> stage & 1) || ct.texture.sampleCount > 1)
+            return false;
+        auto it = fbf_coords_.find(key ^ (uint64_t)stage * 0x9e3779b97f4a7c15ull);
+        if (it == fbf_coords_.end()) {
+            std::pair<bool, std::vector<d9msl::FbFetchCoord>> e;
+            std::string src, why, patched;
+            e.first = d9msl::pixel_source(p, d9msl::PixelVariant{}, &src, &why) &&
+                      d9msl::fbfetch_coords(src, stage, &e.second);
+            if (e.first) {   // the variant must build from the same text
+                d9msl::PixelVariant v;
+                v.fbfetch = (uint8_t)(stage + 1);
+                e.first = d9msl::pixel_source(p, v, &patched, &why);
+            }
+            fprintf(stderr, "d3d9 metal: ps %016llx stage %d samples its own target: %s\n", (unsigned long long)key,
+                    stage, e.first ? "read from the tile at the pixel" : "copied (lookups not at the pixel)");
+            it = fbf_coords_.emplace(key ^ (uint64_t)stage * 0x9e3779b97f4a7c15ull, std::move(e)).first;
+        }
+        if (!it->second.first)
+            return false;
+        // The draw's constants: the coordinate must be this pixel's texel of the target.
+        const double w = std::max<uint32_t>(ct.desc.width, 1), h = std::max<uint32_t>(ct.desc.height, 1);
+        auto cst = [&](uint32_t r, int comp, float *v) {
+            if (!d.pconst || r >= d.pconst_count)
+                return false;
+            *v = d.pconst[r * 4 + comp];
+            return true;
+        };
+        auto inv = [&](uint32_t r) {
+            float x, y;
+            return cst(r, 0, &x) && cst(r, 1, &y) && std::fabs(x * w - 1.0) < 1e-3 && std::fabs(y * h - 1.0) < 1e-3;
+        };
+        for (const d9msl::FbFetchCoord &c : it->second.second) {
+            if (c.kind == 0 && !inv(c.k))
+                return false;
+            float o;
+            if (c.kind == 1 && (!inv(c.m) || !cst(c.k, c.comp, &o) || !(o >= 0.0f && o < 1.0f)))
+                return false;
+        }
+        return true;
+    }
     void fb_prepare(const HostD9Draw &d) {
         fb_sampled_ = 0;
+        fb_fetch_ = 0;
         // RECOMP_D3D9_FB_COPY=0 (a measurement, session 16 part 2): no copies, the draw samples the placeholder as
         // before cfc51ee, so a frame's cost without the pass breaks the copies make can be read off.
         static const bool fb_off = [] { const char *e = recomp_env("D3D9_FB_COPY"); return e && *e == '0'; }();
@@ -7325,6 +7380,18 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             if (!sampled)
                 continue;
             fb_sampled_ |= 1u << i;
+            if (!fb_fetch_) {   // one stage of one target read from the tile
+                int stage = -1, n = 0;
+                for (uint32_t st = 0; st < 16; ++st)
+                    if ((used >> st & 1) && tex_ptr(d.sampler_texture[st])->texture == targets[i])
+                        stage = (int)st, ++n;
+                Tex *ct = tex_ptr(tid);
+                if (n == 1 && ct && !ct->depth && fb_fetch_ok(d, key, p, stage, *ct)) {
+                    fb_fetch_ = (uint8_t)((stage + 1) | i << 5);
+                    ++fb_fetches_;
+                    continue;
+                }
+            }
             FbShadow &sh = fb_shadow_[tid];
             if (sh.valid)
                 continue;
@@ -7350,6 +7417,8 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             ++gp_blits_;
             [blit copyFromTexture:src toTexture:sh.tex];
             [blit endEncoding];
+            if (gp_on_)
+                ++fb_copy_by_ps_[{key, i}];
             sh.valid = true;
             ++fb_valid_;
             if (++fb_copies_ == 1)
@@ -7364,8 +7433,9 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             return;
         const uint32_t outs = d9msl::pixel_color_outputs(pp);
         for (int i = 0; i < 4; ++i)
-            if (pass_color_[i] && cw[i] && (outs >> i & 1) && !(fb_sampled_ >> i & 1))
-                fb_invalidate(d.target.color[i].id);
+            if (pass_color_[i] && cw[i] && (outs >> i & 1) && !(fb_sampled_ >> i & 1) &&
+                fb_invalidate(d.target.color[i].id) && gp_on_)
+                ++fb_inval_by_ps_[{d.ps_key ? d.ps_key : (d.ps ? d9sh::code_key(d.ps, d.ps_size) : 0), i}];
     }
     bool ensure_pass(const HostD9Target &t) {
         if (same_target(t))
@@ -7537,6 +7607,9 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     uint64_t gp_pass_draws_ = 0;
     std::map<GpuPassKey, GpuPassAcc> gp_acc_;
     uint64_t gp_unsampled_ = 0, gp_blits_ = 0;
+    // Where the passes end: the source line of each end_pass() that closed an open encoder, with the closed pass's
+    // colour target (w, h, format), counted while RECOMP_D3D9_GPU_PASSES=1 and reported with the passes.
+    std::map<std::tuple<int, uint32_t, uint32_t, uint32_t>, uint64_t> gp_ends_;
     double gp_t0_ = 0, gp_cal_media_ = 0;
     uint64_t gp_frames0_ = 0, gp_cb_us0_ = 0;
     MTLTimestamp gp_cal_gpu_ = 0;
@@ -7679,12 +7752,14 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         MTLTimestamp cpu = 0, gpu = 0;
         [mtl_ sampleTimestamps:&cpu gpuTimestamp:&gpu];
         std::map<GpuPassKey, GpuPassAcc> acc;
+        std::map<std::tuple<int, uint32_t, uint32_t, uint32_t>, uint64_t> ends;
         uint64_t unsampled, blits;
         {
             std::lock_guard<std::mutex> lk(gp_mu_);
             if (gpu > gp_cal_gpu_ && now > gp_cal_media_)
                 gp_ns_per_tick_ = (now - gp_cal_media_) * 1e9 / (double)(gpu - gp_cal_gpu_);
             acc.swap(gp_acc_);
+            ends.swap(gp_ends_);
             unsampled = gp_unsampled_, blits = gp_blits_;
             gp_unsampled_ = gp_blits_ = 0;
         }
@@ -7718,12 +7793,39 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
                     a.vertex_ns / 1e6 / frames, a.fragment_ns / 1e6 / frames, (double)a.passes / frames,
                     (double)a.draws / frames);
         }
+        std::vector<std::pair<uint64_t, std::tuple<int, uint32_t, uint32_t, uint32_t>>> ev;
+        for (auto &e : ends)
+            ev.emplace_back(e.second, e.first);
+        std::sort(ev.begin(), ev.end(), [](auto &a, auto &b) { return a.first > b.first; });
+        for (size_t i = 0; i < ev.size() && i < 12; ++i) {
+            const auto &[line, w, h, f] = ev[i].second;
+            const char *fn = gp_format(f);
+            fprintf(stderr, "d3d9 metal: gpu pass end at d3d9_metal.mm:%d (%ux%u %s): %.1f per frame\n", line, w, h,
+                    fn ? fn : "?", (double)ev[i].first / frames);
+        }
+        for (auto *m : {&fb_copy_by_ps_, &fb_inval_by_ps_}) {
+            std::vector<std::pair<uint64_t, std::pair<uint64_t, int>>> fv;
+            for (auto &e : *m)
+                fv.emplace_back(e.second, e.first);
+            std::sort(fv.begin(), fv.end(), [](auto &a, auto &b) { return a.first > b.first; });
+            for (size_t i = 0; i < fv.size() && i < 8; ++i)
+                fprintf(stderr, "d3d9 metal: gpu fb %s by ps %016llx (target %d): %.2f per frame\n",
+                        m == &fb_copy_by_ps_ ? "copy" : "invalidated", (unsigned long long)fv[i].second.first,
+                        fv[i].second.second, (double)fv[i].first / frames);
+            m->clear();
+        }
         gp_t0_ = now;
         gp_frames0_ = presents_;
         gp_cb_us0_ = cb_us;
     }
-    void end_pass() {
+    void end_pass(int line = __builtin_LINE()) {
         gp_end_pass();
+        if (enc_ && gp_on_) {
+            id<MTLTexture> c = pass_color_[0];
+            std::lock_guard<std::mutex> lk(gp_mu_);
+            ++gp_ends_[{line, c ? (uint32_t)c.width : 0u, c ? (uint32_t)c.height : 0u,
+                        c ? (uint32_t)c.pixelFormat : 0u}];
+        }
         if (enc_) {
             [enc_ endEncoding];
             enc_ = nil;
@@ -8014,7 +8116,8 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         }
         if (const char *dir = recomp_env("D3D9_SHADER_DUMP"); dir && ok && !from_pending) {
             char path[1024];
-            snprintf(path, sizeof path, "%s/%016llx.msl", dir, (unsigned long long)key);
+            snprintf(path, sizeof path, "%s/%016llx-%016llx.msl", dir, (unsigned long long)code_key,
+                     (unsigned long long)key);
             if (FILE *f = fopen(path, "w")) {
                 fputs(src.c_str(), f);
                 fclose(f);

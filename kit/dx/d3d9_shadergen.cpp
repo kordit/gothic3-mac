@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <regex>
 #include <set>
 #include <vector>
 
@@ -2594,6 +2595,102 @@ void fade_patch(std::string *s) {
     s->insert(ps + sizeof kPs - 1 - 2, "    float4 fade;\n");
 }
 
+// Session 17 (Gothic 3 soft particles, d3d9_msl.h fbfetch_coords): the stage's lookups and how each finds its
+// coordinate. A Metal pass cannot sample its own attachment, so the host copied the target before each such draw: in a
+// fight 7.7 copies a frame of the 1920x1200 depth target, each ending the scene pass (store and reload of every
+// attachment), about a third of the GPU frame.
+namespace {
+struct FbLookup {
+    size_t at, len; // the lookup text "(txS.sample(smS, ((r[N].xyzw)).xy))"
+    FbFetchCoord c;
+};
+std::vector<std::string> fb_lines(const std::string &s, std::vector<size_t> *starts) {
+    std::vector<std::string> v;
+    size_t i = 0;
+    while (i < s.size()) {
+        size_t e = s.find('\n', i);
+        if (e == std::string::npos)
+            e = s.size();
+        starts->push_back(i);
+        v.push_back(s.substr(i, e - i));
+        i = e + 1;
+    }
+    return v;
+}
+bool fb_lookups(const std::string &s, int stage, std::vector<FbLookup> *out) {
+    const std::string S = std::to_string(stage);
+    const std::string needle = "tx" + S + ".sample(";
+    const size_t main = s.find("fragment D9PSOut ps_main(");
+    if (main == std::string::npos)
+        return false;
+    std::vector<size_t> starts;
+    const std::vector<std::string> L = fb_lines(s, &starts);
+    static const std::regex kLookup(R"(^    r\[(\d+)\] = \(tx(\d+)\.sample\(sm(\d+), \(\(r\[(\d+)\]\.xyzw\)\)\.xy\)\);$)");
+    static const std::regex kA(
+        R"(^    \{ float4 w_ = \(\(c\[(\d+)\]\.xyzw\) \* \(float4\(vin\.pos\.xy / d9_rts - 0\.5, 0\.0, 0\.0\)\.xyzw\)\); r\[(\d+)\]\.xy = w_\.xy; \}$)");
+    static const std::regex kB1(
+        R"(^    \{ float4 w_ = \(\(c\[(\d+)\]\.(xxxx|yyyy|zzzz|wwww)\) \+ \(float4\(vin\.pos\.xy / d9_rts - 0\.5, 0\.0, 0\.0\)\.xyzw\)\); r\[(\d+)\]\.xy = w_\.xy; \}$)");
+    static const std::regex kB2(R"(^    \{ float4 w_ = \(\(r\[(\d+)\]\.xyzw\) \* \(c\[(\d+)\]\.xyzw\)\); r\[(\d+)\]\.xy = w_\.xy; \}$)");
+    size_t found = 0;
+    for (size_t i = 0; i < L.size(); ++i) {
+        if (starts[i] < main || L[i].find(needle) == std::string::npos)
+            continue;
+        ++found;
+        std::smatch m;
+        if (!std::regex_match(L[i], m, kLookup) || m[2] != S || m[3] != S || m[1] != m[4] || i < 1)
+            return false;
+        const std::string N = m[1];
+        FbLookup fl{};
+        const size_t open = L[i].find("(tx");
+        fl.at = starts[i] + open;
+        fl.len = L[i].size() - 1 - open; // up to the ';'
+        std::smatch a;
+        if (std::regex_match(L[i - 1], a, kA) && a[2] == N) {
+            fl.c.kind = 0;
+            fl.c.k = (uint16_t)std::stoi(a[1]);
+        } else if (i >= 2 && std::regex_match(L[i - 1], a, kB2) && a[1] == N && a[3] == N) {
+            std::smatch b;
+            if (!std::regex_match(L[i - 2], b, kB1) || b[3] != N)
+                return false;
+            fl.c.kind = 1;
+            fl.c.k = (uint16_t)std::stoi(b[1]);
+            fl.c.comp = (uint8_t)std::string("xyzw").find(b[2].str()[0]);
+            fl.c.m = (uint16_t)std::stoi(a[2]);
+        } else {
+            return false;
+        }
+        out->push_back(fl);
+    }
+    return found > 0 && found == out->size();
+}
+} // namespace
+
+bool fbfetch_coords(const std::string &src, int stage, std::vector<FbFetchCoord> *out) {
+    std::vector<FbLookup> v;
+    if (stage < 0 || stage > 15 || !fb_lookups(src, stage, &v))
+        return false;
+    for (const FbLookup &l : v)
+        out->push_back(l.c);
+    return true;
+}
+
+bool fbfetch_patch(std::string *s, int stage, int rt) {
+    static const char kMain[] = "fragment D9PSOut ps_main(";
+    static const char kOpen[] = ") {\n    float4 r[32] = {};\n";
+    std::vector<FbLookup> v;
+    if (rt < 0 || rt > 3 || !fb_lookups(*s, stage, &v))
+        return false;
+    const size_t f = s->find(kMain);
+    const size_t o = f == std::string::npos ? f : s->find(kOpen, f);
+    if (o == std::string::npos || o > v.front().at)
+        return false;
+    const std::string fb = "d9_fb" + std::to_string(rt);
+    for (size_t i = v.size(); i-- > 0;)
+        s->replace(v[i].at, v[i].len, "(" + fb + ")");
+    s->insert(o, ",\n                         float4 " + fb + " [[color(" + std::to_string(rt) + ")]]");
+    return true;
+}
+
 // ---- Remaster run 13 natural water (review/run13/x360-study-design.md 3(c), census 8 Oct) ----------------------------
 // PC water is a WORLD program with an ANM_WATERA_ flipbook frame at stage 0 (the host selects by key): base = stage 0
 // at tc[0], d0 = baked light x extinction, d1 = N.L x sun colour, t2 = in-scatter (fog add). Census 8 Oct: half the
@@ -3175,6 +3272,11 @@ bool pixel_source(const Program &p, const PixelVariant &v, std::string *out, std
                         "    float fade = 1.0 - t * t * (3.0 - 2.0 * t);\n"
                         "    return albedo * sum * (fade * max(pb[18].z, 0.0));\n"
                         "}\n");
+    }
+    if (v.fbfetch && !fbfetch_patch(&s, (v.fbfetch & 31) - 1, v.fbfetch >> 5)) {   // session 17, before any patch
+        if (why)                                                                       // that rewrites lookups
+            *why = "fbfetch: the stage's lookups are not at the pixel's own position";
+        return false;
     }
     if (v.hdr && !hdr_epilogue(&s, v.hdr)) {   // item 10: never "drawn to the float frame unclamped"
         if (why)
