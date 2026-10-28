@@ -66,7 +66,7 @@ inline_call_cache = true
 # trace.ctl, native/g3_opt.c). The header goes to every module; the sources build into the exe's
 # library. Changing the header recompiles every module, the sources alone do not.
 overrides = "native/g3_overrides.h"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c", "native/lod.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c", "native/lod.c", "native/navfix.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
 
 [hooks]
 # Sentinels.
@@ -200,7 +200,9 @@ base = 0x10910000
 size = 0x486000
 listings = "analysis/Game.dll"
 # G3Fixes hook 19: MOV EBX,[EAX+0x14] in gCInventory_PS::CanLearnSkill (native_site_109c656f)
-native_sites = [{at = 0x109c656f, resume = [0x109c6572]}]
+native_sites = [{at = 0x109c656f, resume = [0x109c6572]},
+    # navfix (native/navfix.c): FindWay's record without a property set gets an empty ID instead of a call to 0
+    {at = 0x10a40550, resume = [0x10a40561]}, {at = 0x10a4051b, resume = [0x10a4052c]}]
 
 [modules.aux.filesystem]
 name = "FileSystem.dll"
