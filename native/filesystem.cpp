@@ -24,6 +24,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
@@ -720,9 +721,18 @@ void m_create_file(X86 *c) {
                 auto fresh = std::make_shared<Shared>();
                 const bool lend =
                     hit.node->size >= LEND && !recomp_cur_is_main_thread() && recomp_host_work_begin();
+                const auto t0 = std::chrono::steady_clock::now();
                 const bool ok = g3fs::pack_read_entry(*hit.pack, *hit.node, &fresh->bytes);
+                const double ms =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
                 if (lend)
                     recomp_host_work_end();
+                // An entry that costs a frame (session 21: up to 275 ms of inflate under Engine's Prefetch on the
+                // game thread): which one, from which archive, how big.
+                if (ms >= 20.0)
+                    fprintf(stderr, "[g3fs] read %s took %.1f ms (%.1f MB packed, %.1f MB, %s, %s thread)\n",
+                            path.c_str(), ms, hit.node->stored / 1048576.0, hit.node->size / 1048576.0,
+                            hit.pack->path.c_str(), recomp_cur_is_main_thread() ? "main" : "other");
                 if (!ok) {
                     ret(c, 0);
                     return;
