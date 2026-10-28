@@ -66,7 +66,7 @@ inline_call_cache = true
 # trace.ctl, native/g3_opt.c). The header goes to every module; the sources build into the exe's
 # library. Changing the header recompiles every module, the sources alone do not.
 overrides = "native/g3_overrides.h"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c", "native/lod.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
 
 [hooks]
 # Sentinels.
@@ -186,6 +186,9 @@ listings = "analysis/Engine.dll"
 # CRT terminator from a data table (work/vtable_gaps.py); a float comparator
 # passed to the CRT's qsort (called at 10564e62, run-147)
 entry_points = [0x10582ada, 0x103fd1c0]
+# lod (native/lod.c): CreateLoD's walk for a vertex by key (FUN_10548ad0), answered through a hash; on at the walk's
+# match or after it
+native_sites = [{at = 0x10548c3a, resume = [0x10548c53, 0x10548cb7]}]
 
 [modules.aux.game]
 name = "Game.dll"

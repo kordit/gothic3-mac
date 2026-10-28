@@ -27,6 +27,7 @@ enum {
     G3OPT_ZLIB = 1u << 17, /* zlib: FileSystem's inflate (archive reads: textures, world loading, streaming) */
     G3OPT_LOAD = 1u << 21, /* load: the image cache's loader thread (read at engine start only) */
     G3OPT_RTTI = 1u << 22, /* rtti: dynamic_cast answers remembered per complete type (quick saves) */
+    G3OPT_LOD = 1u << 23, /* lod: CreateLoD's vertex lookup by key through a hash (quick loads, meshes coming in) */
 };
 
 extern volatile uint32_t g3_opt;
