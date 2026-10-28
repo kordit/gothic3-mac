@@ -9,6 +9,9 @@ set(POP_WARN_GEN -Wall -Wextra -Wno-unused)
 # -O1 for hosts and tests. A Debug configuration leaves this out and gets -O0.
 function(pop_optimize target level)
   target_compile_options(${target} PRIVATE $<$<NOT:$<CONFIG:Debug>>:-O${level}>)
+  if(level GREATER_EQUAL 2 AND POP_PLAYER_FLAGS)
+    target_compile_options(${target} PRIVATE $<$<NOT:$<CONFIG:Debug>>:${POP_PLAYER_FLAGS}>)
+  endif()
 endfunction()
 
 # Every test executable registers here so `check_binaries` builds exactly the

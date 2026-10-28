@@ -666,6 +666,8 @@ def parse_args(argv, system=None):
     parser.add_argument("--version", default=None,
                         help="Version baked into the hosts (POP_RECOMP_VERSION; default: git describe, else unknown). "
                         "A game's Setup passes its release version: a source archive has no git history")
+    parser.add_argument("--pgo-generate", action="store_true",
+                        help="Build the player code instrumented to write an LLVM profile (LLVM_PROFILE_FILE)")
     parser.add_argument("--target", choices=sorted(TARGETS), default="app")
     parser.add_argument("--jobs", type=int, default=min(os.cpu_count() or 2, 8))
     parser.add_argument("--translate-jobs", type=int, default=None,
@@ -724,6 +726,7 @@ def main():
     preset = preset_name(args.preset, args.config, stub=args.stub, target=args.target)
     build_dir = build_dir_for(args.build_root, preset)
     defines = game_defines(args.game_dir, args.build_root, args.version)
+    defines.append("-DRECOMP_PGO_GENERATE=%s" % ("ON" if args.pgo_generate else "OFF"))
     try:
         # The lock lives at <build root>/recomp/.lock: BuildLock joins build/recomp/.lock onto its argument.
         with buildlock.BuildLock(args.build_root.parent, "tools/build.py"):

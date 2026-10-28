@@ -209,6 +209,9 @@ def render_cmake(cfg):
                  % (cfg["overrides_header"].as_posix() if cfg.get("overrides_header") else ""))
     lines.append("set(RECOMP_AUX_MODULES %s)" % ";".join(m["key"] for m in cfg["aux_modules"]))
     lines.append("set(RECOMP_STORE_HOOKS %s)" % ("ON" if cfg["translate"].get("store_hooks", True) else "OFF"))
+    lines.append("set(RECOMP_LTO %s)" % ("ON" if cfg["translate"].get("lto", False) else "OFF"))
+    profile = cfg["translate"].get("pgo_profile", "")
+    lines.append('set(RECOMP_PGO_PROFILE "%s")' % ((Path(cfg["dir"]) / profile).resolve().as_posix() if profile else ""))
     lines.append('set(RECOMP_DEVELOPER_GAME_DIR "%s")' % cfg["developer_exe_path"].parent.as_posix())
     lines.append('set(RECOMP_DEVELOPER_EXE "%s")' % cfg["developer_exe_path"].as_posix())
     # [translate] native: C replacements for hot functions, compiled with the

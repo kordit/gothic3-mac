@@ -289,6 +289,14 @@ def load(game_dir):
     x87_locals = translate.setdefault("x87_locals", False)
     if not isinstance(x87_locals, bool):
         raise ValueError("%s: [translate] x87_locals must be a boolean" % source)
+    # lto: the code players run (pop_optimize level 2) compiled and linked with ThinLTO, so translated functions
+    # inline across chunks. pgo_profile: an LLVM .profdata (relative to the game) every such object is built with;
+    # a missing file stops the configure, so no build quietly goes without it. tools/build.py --pgo-generate builds
+    # the instrumented binary that writes one instead.
+    if not isinstance(translate.setdefault("lto", False), bool):
+        raise ValueError("%s: [translate] lto must be a boolean" % source)
+    if not isinstance(translate.setdefault("pgo_profile", ""), str):
+        raise ValueError("%s: [translate] pgo_profile must be a path string" % source)
     alignment = translate.setdefault("function_alignment", 16)
     if type(alignment) is not int or alignment <= 0:
         raise ValueError("%s: [translate] function_alignment must be a positive integer" % source)
