@@ -17,7 +17,9 @@
 // RECOMP_HOST_PROFILE_SPIKE=<ms> as well (Gothic 3 session 18: a player's stutters of 50-90 ms that the
 // frame phases did not explain): it samples the thread that presents (the game thread) instead of the
 // baton's holder, keeps only the current frame's stacks, and when a frame took <ms> or more writes them
-// to <prefix>-spike-<n>-<ms>.txt (at most 60 files), from the sampler thread so the game does not wait.
+// to <prefix>-spike-<n>-<ms>.txt, from the sampler thread so the game does not wait. At most SPIKE_FILES files or
+// SPIKE_BYTES in all: the first cap, 60 files, was spent on the menu and the loading screen before the player had
+// walked two minutes (Gothic 3 session 19). A loading screen's frame writes a few MB, a stutter in play tens of KB.
 #include "hostprof.h"
 
 #include "../platform/os.h"
@@ -56,7 +58,10 @@ struct State {
     std::map<Stack, uint64_t> frame;
     std::vector<std::pair<double, std::map<Stack, uint64_t>>> pending;
     unsigned spikes = 0;
+    std::atomic<uint64_t> spike_bytes{0};
 };
+const unsigned SPIKE_FILES = 2000;
+const uint64_t SPIKE_BYTES = 1ull << 30;
 State &state() {
     static State *s = new State;
     return *s;
@@ -116,6 +121,7 @@ void write_spikes() {
         snprintf(path, sizeof path, "%s-spike-%u-%.0f.txt", prefix(), s.spikes++, spike.first);
         if (FILE *f = fopen(path, "w")) {
             write_stacks(f, spike.second);
+            s.spike_bytes += (uint64_t)ftell(f);
             fclose(f);
         }
     }
@@ -245,7 +251,7 @@ void hostprof_frame(double frame_ms) {
     auto &s = state();
     s.game_thread.store((uint64_t)(uintptr_t)pthread_self(), std::memory_order_release);
     std::lock_guard<std::mutex> lock(s.mutex);
-    if (frame_ms >= spike_ms() && s.spikes + s.pending.size() < 60)
+    if (frame_ms >= spike_ms() && s.spikes + s.pending.size() < SPIKE_FILES && s.spike_bytes < SPIKE_BYTES)
         s.pending.emplace_back(frame_ms, std::move(s.frame));
     s.frame.clear();
 }
