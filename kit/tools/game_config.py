@@ -231,12 +231,6 @@ def load(game_dir):
     memory = game.setdefault("physical_memory_mb", 512)
     if not isinstance(memory, int) or isinstance(memory, bool) or not 64 <= memory <= 65536:
         raise ValueError("%s: [game] physical_memory_mb must be an integer 64-65536" % source)
-    # [game] processors: dwNumberOfProcessors of GetSystemInfo. 1 (default) keeps a game on the one-core path it was
-    # tested on; 0 reports the host's logical processors (at most 32). Gothic 3 starts its PVS prefetcher thread only
-    # with more than one (eCPVSPrefetcherJob::Create, Engine 10406de0). RECOMP_CPU_COUNT still wins.
-    cpus = game.setdefault("processors", 1)
-    if not isinstance(cpus, int) or isinstance(cpus, bool) or not 0 <= cpus <= 32:
-        raise ValueError("%s: [game] processors must be an integer 0-32" % source)
     # [game] free_threads: a module whose guest threads run without the scheduler's baton (kit/runtime/kernel32.cpp,
     # "Free threads"); "" (default) keeps every thread under it. RECOMP_FREE_THREADS overrides, "none" turns it off.
     if not isinstance(game.setdefault("free_threads", ""), str):

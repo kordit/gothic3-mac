@@ -1473,19 +1473,13 @@ void k_GetSystemInfo(X86 *c) {
     wr32(p + 4, 4096);        // dwPageSize
     wr32(p + 8, IMAGE_BASE);  // lpMinimumApplicationAddress
     wr32(p + 12, HEAP_LIMIT); // lpMaximumApplicationAddress
-    // [game] processors (RECOMP_PROCESSORS, default one; 0 is the host's
-    // logical processors), RECOMP_CPU_COUNT=<n> over it. Guest threads still
-    // run one at a time under the scheduler's baton; the count only decides
-    // what a game believes it can spread its work over.
+    // RECOMP_CPU_COUNT=<n>: report n processors (default one). Guest threads
+    // still run one at a time under the scheduler's baton; the count only
+    // decides what a game believes it can spread its work over.
     static const uint32_t cpus = [] {
-#ifndef RECOMP_PROCESSORS
-#define RECOMP_PROCESSORS 1u
-#endif
         const char *e = recomp_env("CPU_COUNT");
-        unsigned long n = e ? strtoul(e, nullptr, 10) : RECOMP_PROCESSORS;
-        if (n == 0)
-            n = std::thread::hardware_concurrency();
-        return (uint32_t)(n >= 1 && n <= 32 ? n : n > 32 ? 32 : 1);
+        const unsigned long n = e ? strtoul(e, nullptr, 10) : 1;
+        return (uint32_t)(n >= 1 && n <= 32 ? n : 1);
     }();
     wr32(p + 16, cpus >= 32 ? 0xffffffffu : (1u << cpus) - 1); // dwActiveProcessorMask
     wr32(p + 20, cpus);                                        // dwNumberOfProcessors
