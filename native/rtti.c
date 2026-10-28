@@ -16,7 +16,7 @@
  * bad_cast) always runs the original.
  *
  * G3_RTTI_CHECK=1 runs the original for every call too and logs any answer that differs. Each module that links its own
- * copy (the exe, Engine, SharedBase, Game, GUI, Script, Script_Game, FileSystem, Importer: the VS2005 CRT's) has a
+ * copy (the exe, Engine, SharedBase, Game, GUI, Script, Script_Game, Importer: the VS2005 CRT's) has a
  * g3n_ of its own, with the same arguments. Callers were guest code under the baton; with the logic on a thread of
  * its own beside the render (stage 5, pipe.c) two can cast at once, so each entry has a sequence count: odd while it is
  * written, read twice around the key. A reader that sees it change takes the original's way; a writer that finds it
@@ -35,7 +35,6 @@ void fn_1106dd34(X86 *c); /* Script_Game ___RTDynamicCast */
 void fn_105639b8(X86 *c); /* Engine ___RTDynamicCast */
 void fn_1006f1f7(X86 *c); /* SharedBase ___RTDynamicCast */
 void fn_10f4d4c2(X86 *c); /* Script ___RTDynamicCast */
-void fn_10daff4b(X86 *c); /* FileSystem ___RTDynamicCast */
 void fn_10ec70a4(X86 *c); /* Importer ___RTDynamicCast */
 
 #define RT_SLOTS 8192u
@@ -142,9 +141,6 @@ void g3n_1006f1f7(X86 *c) {
 }
 void g3n_10f4d4c2(X86 *c) {
     rt_cast(c, fn_10f4d4c2);
-}
-void g3n_10daff4b(X86 *c) {
-    rt_cast(c, fn_10daff4b);
 }
 void g3n_10ec70a4(X86 *c) {
     rt_cast(c, fn_10ec70a4);

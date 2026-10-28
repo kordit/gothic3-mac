@@ -1,5 +1,5 @@
-/* native/tests/memory_test.c - native/memory.c against the translated CRT copies of all seven
- * modules.
+/* native/tests/memory_test.c - native/memory.c against the translated CRT copies of all six
+ * modules that have them (FileSystem.dll's went native whole, D-043).
  *
  * Build and run (from the repository root or a worktree):
  *   sh native/tests/run.sh memory
@@ -16,8 +16,6 @@ COPY_FN(10078780)
 COPY_FN(1006bba0)
 COPY_FN(1056ad40)
 COPY_FN(10564220)
-COPY_FN(10db3620)
-COPY_FN(10db0050)
 COPY_FN(10af1980)
 COPY_FN(10ae9d80)
 COPY_FN(10dde620)
@@ -36,8 +34,6 @@ static const struct {
     {"SharedBase memmove", fn_1006bba0, g3n_1006bba0, 0x102442c4u},
     {"Engine memcpy", fn_1056ad40, g3n_1056ad40, 0x10879a7cu},
     {"Engine memmove", fn_10564220, g3n_10564220, 0x10879a7cu},
-    {"FileSystem memcpy", fn_10db3620, g3n_10db3620, 0x10dc857cu},
-    {"FileSystem memmove", fn_10db0050, g3n_10db0050, 0x10dc857cu},
     {"Game memcpy", fn_10af1980, g3n_10af1980, 0x10d1886cu},
     {"Game memmove", fn_10ae9d80, g3n_10ae9d80, 0x10d1886cu},
     {"GFC memcpy", fn_10dde620, g3n_10dde620, 0x10df1ee4u},
@@ -65,7 +61,6 @@ static const struct {
 static unsigned long vec_calls;
 VEC_FN(sharedbase, 100722a0)
 VEC_FN(engine, 1056db01)
-VEC_FN(filesystem, 10db132f)
 VEC_FN(game, 10aed63e)
 VEC_FN(gfc, 10ddb185)
 VEC_FN(gui, 10e2efca)
@@ -90,13 +85,13 @@ static void one(unsigned f, uint32_t dst, uint32_t src, uint32_t n, uint32_t sse
 
 int main(void) {
     harness_mem();
-    static const char *dlls[] = {"SharedBase.dll", "Engine.dll", "FileSystem.dll", "Game.dll",
+    static const char *dlls[] = {"SharedBase.dll", "Engine.dll", "Game.dll",
                                  "GFC.dll",        "GUI.dll",    "Script.dll"};
     for (unsigned i = 0; i < sizeof dlls / sizeof dlls[0]; ++i)
         map_module(dlls[i]);
     for (size_t i = 0; i < sizeof noise; ++i)
         noise[i] = (uint8_t)rnd();
-    recomp_sharedbase_hk_100722a0 = recomp_engine_hk_1056db01 = recomp_filesystem_hk_10db132f = 1;
+    recomp_sharedbase_hk_100722a0 = recomp_engine_hk_1056db01 = 1;
     recomp_game_hk_10aed63e = recomp_gfc_hk_10ddb185 = recomp_gui_hk_10e2efca = 1;
     recomp_script_hk_10f4f4c5 = 1;
     for (unsigned f = 0; f < NFNS; ++f) {

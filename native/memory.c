@@ -4,7 +4,7 @@
  * version is written it only calls the original; a native version runs under G3OPT(MEM) and
  * must end as the translated function does (see its RET in build/recomp/gen/aux-<module>/).
  *
- * All fourteen are the same MSVC 8 routine (the listings in analysis/ match instruction for
+ * All twelve are the same MSVC 8 routine (the listings in analysis/ match instruction for
  * instruction apart from addresses), and memcpy is memmove there: a destination inside the
  * source copies from the top down, every other case forward, and the SSE2 path
  * (_VEC_memcpy, n >= 256 with equal alignment mod 16, taken when __sse2_available is set) is a
@@ -23,8 +23,6 @@ void fn_10078780(X86 *c); /* SharedBase _memcpy */
 void fn_1006bba0(X86 *c); /* SharedBase _memmove */
 void fn_1056ad40(X86 *c); /* Engine _memcpy */
 void fn_10564220(X86 *c); /* Engine _memmove */
-void fn_10db3620(X86 *c); /* FileSystem _memcpy */
-void fn_10db0050(X86 *c); /* FileSystem _memmove */
 void fn_10af1980(X86 *c); /* Game _memcpy */
 void fn_10ae9d80(X86 *c); /* Game _memmove */
 void fn_10dde620(X86 *c); /* GFC _memcpy */
@@ -66,8 +64,6 @@ CRT_COPY(10078780)
 CRT_COPY(1006bba0)
 CRT_COPY(1056ad40)
 CRT_COPY(10564220)
-CRT_COPY(10db3620)
-CRT_COPY(10db0050)
 CRT_COPY(10af1980)
 CRT_COPY(10ae9d80)
 CRT_COPY(10dde620)

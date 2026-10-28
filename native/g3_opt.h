@@ -17,14 +17,13 @@ enum {
     G3OPT_SHADOW = 1u << 10, /* shadow */
     G3OPT_OCCLMOVE = 1u << 11, /* occlmove: occl's hidden-before nodes drawn instead of waited for while the camera moves */
     G3OPT_PDO = 1u << 12, /* pdo: the particle system's processing (DoProcessV2) and depth sort */
-    G3OPT_AI = 1u << 13, /* ai: the AI scripts' hot path in a fight (speech file lookup by name) */
-    G3OPT_VFS = 1u << 14, /* vfs: FileSystem directory scan (FindFirstFileA for speech files) */
+    G3OPT_AI = 1u << 13, /* ai: SharedBase's _strrchr and the vector geometry under the AI's fight code */
     G3OPT_CULL = 1u << 15, /* cull: the per-entity culling chain under ExtractFromEntity */
     G3OPT_EXEC = 1u << 16, /* exec: pieces of the render list's execution (particle depth sort, shader constants) */
     G3OPT_MOVE = 1u << 20, /* move: NPC movement and motion outside PhysX (skeleton-to-motion track matching) */
     G3OPT_ANIM = 1u << 19, /* anim: character animation, pose sampling and blending down the bone hierarchy */
     G3OPT_UV = 1u << 18, /* uv: the particles' vertex update (UpdateVertices) without SharedBase guest calls */
-    G3OPT_ZLIB = 1u << 17, /* zlib: FileSystem's inflate (archive reads: textures, world loading, streaming) */
+    G3OPT_ZLIB = 1u << 17, /* zlib: a save's compression with libdeflate (savezip.c) */
     G3OPT_LOAD = 1u << 21, /* load: the image cache's loader thread (read at engine start only) */
     G3OPT_RTTI = 1u << 22, /* rtti: dynamic_cast answers remembered per complete type (quick saves) */
     G3OPT_LOD = 1u << 23, /* lod: CreateLoD's vertex lookup by key through a hash (quick loads, meshes coming in) */

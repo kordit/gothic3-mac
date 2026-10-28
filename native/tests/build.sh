@@ -61,7 +61,7 @@ comm -23 "$out/undef.txt" "$out/def.txt" | grep -v '^$' >"$out/missing.txt" || t
         n=${s#_}
         case "$n" in
         recomp_frame_watch | recomp_return_hits | recomp_ic_tables | recomp_trace_game_hook) ;;
-        fn_* | g3n_* | g3x_* | g3_console_control | recomp_*) printf "%s\n" "void $n(void) { puts(\"stub reached: $n\"); abort(); }" ;;
+        fn_* | g3n_* | g3x_* | g3_console_control | g3_mods_control | recomp_*) printf "%s\n" "void $n(void) { puts(\"stub reached: $n\"); abort(); }" ;;
         *) ;; # libc and libm
         esac
     done <"$out/missing.txt"

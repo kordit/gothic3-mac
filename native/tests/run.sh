@@ -34,7 +34,6 @@ memory)
     native=memory.c
     chunks="aux-sharedbase/chunk_10078000.c aux-sharedbase/chunk_10068000.c aux-sharedbase/chunk_10070000.c
             aux-engine/chunk_10568000.c aux-engine/chunk_10564000.c aux-engine/chunk_1056c000.c
-            aux-filesystem/chunk_10db0000.c
             aux-game/chunk_10af0000.c aux-game/chunk_10ae8000.c aux-game/chunk_10aec000.c
             aux-gfc/chunk_10ddc000.c aux-gfc/chunk_10dd8000.c
             aux-gui/chunk_10e34000.c aux-gui/chunk_10e2c000.c

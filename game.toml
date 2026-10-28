@@ -66,7 +66,7 @@ inline_call_cache = true
 # trace.ctl, native/g3_opt.c). The header goes to every module; the sources build into the exe's
 # library. Changing the header recompiles every module, the sources alone do not.
 overrides = "native/g3_overrides.h"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/vfs.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/zlib.c", "native/anim.c", "native/archive.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c", "native/lod.c", "native/navfix.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/occlusion.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/audio.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/cull.c", "native/ai.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/loading.c", "native/rtti.c", "native/savezip.c", "native/pipe.c", "native/lod.c", "native/navfix.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
 
 [hooks]
 # Sentinels.
@@ -206,16 +206,6 @@ listings = "analysis/Game.dll"
 native_sites = [{at = 0x109c656f, resume = [0x109c6572]},
     # navfix (native/navfix.c): FindWay's record without a property set gets an empty ID instead of a call to 0
     {at = 0x10a40550, resume = [0x10a40561]}, {at = 0x10a4051b, resume = [0x10a4052c]}]
-
-[modules.aux.filesystem]
-name = "FileSystem.dll"
-path = "stage/FileSystem.dll"
-sha256 = "c3a16de14caecb8dedbd03c4649e836cf47ef07c63269269d2775e1d3450f381"
-from = "FileSystem.dll"
-from_sha256 = "2aa50477552d760c3c2932e10c7f4adda1cc30c55866876602a1a20b8f1aab61"
-base = 0x10da0000
-size = 0x2d000
-listings = "analysis/FileSystem.dll"
 
 [modules.aux.gfc]
 name = "GFC.dll"

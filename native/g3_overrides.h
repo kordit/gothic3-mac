@@ -77,10 +77,6 @@ void g3n_1006bba0(X86 *c);
 void g3n_1056ad40(X86 *c);
 #define FN_10564220 g3n_10564220 /* Engine _memmove */
 void g3n_10564220(X86 *c);
-#define FN_10db3620 g3n_10db3620 /* FileSystem _memcpy */
-void g3n_10db3620(X86 *c);
-#define FN_10db0050 g3n_10db0050 /* FileSystem _memmove */
-void g3n_10db0050(X86 *c);
 #define FN_10af1980 g3n_10af1980 /* Game _memcpy */
 void g3n_10af1980(X86 *c);
 #define FN_10ae9d80 g3n_10ae9d80 /* Game _memmove */
@@ -196,10 +192,6 @@ void g3n_11289e10(X86 *c);
 /* also pdo: CalcExtents 103afae0 (its FN_ line is under particles above), and the depth
  * comparator 103af9c0 inline in shadow.c's qsort (no FN_: it is only called through a pointer) */
 
-/* vfs (vfs.c): the virtual file system's directory scan under FindFirstFileA (speech files in combat) */
-#define FN_10da4800 g3n_10da4800 /* FileSystem directory scan (FindFirst/FindNext helper) */
-void g3n_10da4800(X86 *c);
-
 /* cull (cull.c): the per-entity culling chain ExtractFromEntity calls, native end to end */
 #define FN_104030c0 g3n_104030c0 /* Engine eCFrustumElementItem::CullVPTHC */
 void g3n_104030c0(X86 *c);
@@ -216,13 +208,9 @@ void g3n_1040c5a0(X86 *c);
 #define FN_10402f00 g3n_10402f00 /* Engine eCFrustumElementItem::CalculateLoDArea */
 void g3n_10402f00(X86 *c);
 
-/* ai (ai.c): the AI scripts' hot path in a fight: NPC speech finds its file by name, a walk over the whole directory */
-#define FN_10da9e10 g3n_10da9e10 /* FileSystem FUN_10da9e10 (name match, base and extension) */
-void g3n_10da9e10(X86 *c);
+/* ai (ai.c): SharedBase's _strrchr and the vector geometry under the AI's fight code */
 #define FN_1006b740 g3n_1006b740 /* SharedBase _strrchr */
 void g3n_1006b740(X86 *c);
-#define FN_10da29f0 g3n_10da29f0 /* FileSystem FUN_10da29f0 (directory entry's name fits, vtable +0x20) */
-void g3n_10da29f0(X86 *c);
 #define FN_1000f810 g3n_1000f810 /* SharedBase bCVector2::Normalize (CanEvade's collision circles) */
 void g3n_1000f810(X86 *c);
 #define FN_10010e50 g3n_10010e50 /* SharedBase bCVector::GetSquareMagnitude2D */
@@ -252,13 +240,9 @@ void g3n_10011080(X86 *c);
 #define FN_10011040 g3n_10011040 /* SharedBase bCVector::operator- (unary) */
 void g3n_10011040(X86 *c);
 
-/* zlib (zlib.c): FileSystem's static zlib 1.2.5 inflate (inflate_fast, inflate_table, adler32 inside) */
-#define FN_10daa430 g3n_10daa430 /* FileSystem inflate (strm [ESP+4], RET 4) */
-void g3n_10daa430(X86 *c);
+/* savegame.c */
 #define FN_109b9e90 g3n_109b9e90 /* Game gCHUDFileManager save: F5 keeps the previous quick save (native/savegame.c) */
 void g3n_109b9e90(X86 *c);
-#define FN_10da33c0 g3n_10da33c0 /* FileSystem packed-file read: libdeflate in one call (native/archive.c) */
-void g3n_10da33c0(X86 *c);
 
 /* anim (anim.c): character animation, pose sampling and blending down the bone hierarchy */
 #define FN_1054a020 g3n_1054a020 /* Engine FUN_1054a020 (a track's pose copied out) */
@@ -342,8 +326,6 @@ void g3n_105639b8(X86 *c);
 void g3n_1006f1f7(X86 *c);
 #define FN_10f4d4c2 g3n_10f4d4c2 /* Script ___RTDynamicCast */
 void g3n_10f4d4c2(X86 *c);
-#define FN_10daff4b g3n_10daff4b /* FileSystem ___RTDynamicCast */
-void g3n_10daff4b(X86 *c);
 #define FN_10ec70a4 g3n_10ec70a4 /* Importer ___RTDynamicCast */
 void g3n_10ec70a4(X86 *c);
 

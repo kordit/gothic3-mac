@@ -2,6 +2,8 @@
  *
  * Build and run (from the checkout root, while build/recomp/gen still has the FileSystem.dll translation):
  *   NATIVE=filesystem_match.c sh native/tests/build.sh fsmatch aux-filesystem/chunk_10da8000.c
+ * Since step 1.4 the build no longer translates FileSystem.dll, so build/recomp/gen/aux-filesystem is there only
+ * after a regeneration with f79cbff's game.toml (its [modules.aux.filesystem]).
  *
  * FUN_10da9e10 (EAX = wanted name, EDX = entry name, AL = fits) runs on guest strings; g3fs_name_fits gets the same
  * bytes. FileSystem's _tolower 10db08d6 is a fake doing what the real one does in the C locale. Names are drawn so

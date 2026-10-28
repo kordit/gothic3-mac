@@ -1,7 +1,7 @@
 /* native/g3_opt.c - the switches for Gothic 3's native replacements.
  *
  * G3OPT=<groups> in the trace control file (RECOMP_TRACE_CONTROL, read once a second) turns
- * groups on while the game runs: a comma list of rand, particles, occl, d3d, str, mem, audio, vec, scene, leaf, shadow, occlmove, pdo, vfs, cull, ai, move, uv, exec, zlib, anim, load, rtti, lod, "all" or "none", and
+ * groups on while the game runs: a comma list of rand, particles, occl, d3d, str, mem, audio, vec, scene, leaf, shadow, occlmove, pdo, cull, ai, move, uv, exec, zlib, anim, load, rtti, lod, "all" or "none", and
  * "-name" to drop one ("all,-occl"). Without the key the start value stays: RECOMP_G3OPT, else
  * G3OPT_DEFAULT, the one setup the player plays and every bench measures (session 19). Each group's
  * g3n_ functions run their native code only while its bit is set (a diagnosis may turn one off; the
@@ -17,7 +17,7 @@ volatile uint32_t g3_opt = 0xffffffffu; /* g3_opt_init sets the start value */
 static const struct {
     const char *name;
     uint32_t bit;
-} groups[] = {{"rand", G3OPT_RAND}, {"particles", G3OPT_PARTICLES}, {"occl", G3OPT_OCCL}, {"d3d", G3OPT_D3D}, {"str", G3OPT_STR}, {"mem", G3OPT_MEM}, {"audio", G3OPT_AUDIO}, {"vec", G3OPT_VEC}, {"scene", G3OPT_SCENE}, {"leaf", G3OPT_LEAF}, {"shadow", G3OPT_SHADOW}, {"occlmove", G3OPT_OCCLMOVE}, {"pdo", G3OPT_PDO}, {"vfs", G3OPT_VFS}, {"cull", G3OPT_CULL}, {"ai", G3OPT_AI}, {"move", G3OPT_MOVE}, {"anim", G3OPT_ANIM}, {"uv", G3OPT_UV}, {"exec", G3OPT_EXEC}, {"zlib", G3OPT_ZLIB}, {"load", G3OPT_LOAD}, {"rtti", G3OPT_RTTI}, {"lod", G3OPT_LOD}};
+} groups[] = {{"rand", G3OPT_RAND}, {"particles", G3OPT_PARTICLES}, {"occl", G3OPT_OCCL}, {"d3d", G3OPT_D3D}, {"str", G3OPT_STR}, {"mem", G3OPT_MEM}, {"audio", G3OPT_AUDIO}, {"vec", G3OPT_VEC}, {"scene", G3OPT_SCENE}, {"leaf", G3OPT_LEAF}, {"shadow", G3OPT_SHADOW}, {"occlmove", G3OPT_OCCLMOVE}, {"pdo", G3OPT_PDO}, {"cull", G3OPT_CULL}, {"ai", G3OPT_AI}, {"move", G3OPT_MOVE}, {"anim", G3OPT_ANIM}, {"uv", G3OPT_UV}, {"exec", G3OPT_EXEC}, {"zlib", G3OPT_ZLIB}, {"load", G3OPT_LOAD}, {"rtti", G3OPT_RTTI}, {"lod", G3OPT_LOD}};
 
 static uint32_t parse(const char *list, uint32_t value) {
     char word[32];
@@ -53,9 +53,10 @@ static void report(const char *why) {
     fprintf(stderr, "%s\n", line);
 }
 
-/* Everything but vfs, cull and ai: with them a navigation zone's class name ("gCNavZone_PS") is read after it was
- * freed, and NPC navigation warns on every frame (session 18). They come back once that is fixed. */
-#define G3OPT_DEFAULT (0xffffffffu & ~(G3OPT_VFS | G3OPT_CULL | G3OPT_AI))
+/* Everything but cull and ai: with them (and vfs, gone with the translated FileSystem.dll) a navigation zone's class
+ * name ("gCNavZone_PS") is read after it was freed, and NPC navigation warns on every frame (session 18). They come
+ * back once that is fixed. */
+#define G3OPT_DEFAULT (0xffffffffu & ~(G3OPT_CULL | G3OPT_AI))
 static uint32_t g3_start = G3OPT_DEFAULT;
 void g3_console_control(const char *text); /* native/console.c: G3CMD= lines */
 void g3_mods_control(const char *text);    /* native/mods.c: G3LOC= lines */
