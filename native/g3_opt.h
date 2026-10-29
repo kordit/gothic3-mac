@@ -19,6 +19,7 @@ enum {
     G3OPT_ANIM = 1u << 19, /* anim: character animation, pose sampling and blending down the bone hierarchy */
     G3OPT_UV = 1u << 18, /* uv: the particles' vertex update (UpdateVertices) without SharedBase guest calls */
     G3OPT_ZLIB = 1u << 17, /* zlib: a save's compression with libdeflate (savezip.c) */
+    G3OPT_CREATELOD = 1u << 21, /* createlod: CreateLoD's vertex search through a key map (createlod.c) */
 };
 
 extern volatile uint32_t g3_opt;

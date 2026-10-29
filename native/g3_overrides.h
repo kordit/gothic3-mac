@@ -254,4 +254,11 @@ void g3n_10a73590(X86 *c);
 #define FN_10ae30f0 g3n_10ae30f0 /* Game zlib deflate, the save writer's only */
 void g3n_10ae30f0(X86 *c);
 
+/* createlod (createlod.c): CreateLoD's split into hard-skinning groups without the square vertex search (D-043
+ * point 2, decision of 29.10.2026: the subtree under 1053f420, docs/perf/createlod.md) */
+#define FN_1053f420 g3n_1053f420 /* Engine FUN_1053f420 (an actor's meshes split into groups; the key maps' lifetime) */
+void g3n_1053f420(X86 *c);
+#define FN_10548ad0 g3n_10548ad0 /* Engine FUN_10548ad0 (a triangle's corners into its group) */
+void g3n_10548ad0(X86 *c);
+
 #endif

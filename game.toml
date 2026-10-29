@@ -70,7 +70,7 @@ overrides = "native/g3_overrides.h"
 # tools/pgo.sh (an instrumented build run headless on the player's setup); stage/ is not in git, like the modules.
 lto = true
 pgo_profile = "stage/gothic3.profdata"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/savezip.c", "native/navfix.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/createlod.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/savezip.c", "native/navfix.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a"] }
 
 [hooks]
 # Sentinels.
