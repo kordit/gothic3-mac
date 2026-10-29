@@ -17,7 +17,8 @@
  * original (all groups off) against aocache in its two modes from the same state: the tool's (compute and store) and
  * the game's with the result the tool stored (no computation). Compared: every register the callers read, the x87
  * state but its condition codes, all the meshes' memory (every disk's result), the disk counter and the stack from
- * the final ESP up. Then one word the key covers is changed and the game's mode must miss. The cache goes to a
+ * the final ESP up. Then one word the key covers is changed: the game's mode must miss, compute as the original and
+ * store, and the same changed input must then hit. The cache goes to a
  * new folder under /tmp as HOME (left there). The heap block the original's FindMeshesOfInterest grows comes from a bump allocator outside the
  * compared memory: the ready path allocates nothing. */
 #include "difftest_rp.h"
@@ -309,12 +310,25 @@ static void one_case(void) {
     }
     const uint32_t keep = rd32(at);
     wr32(at, keep ^ 1u);
+    /* the game's mode misses, computes as the original and stores; the same input then hits */
+    uint8_t *changed = malloc(DATA_LEN);
+    memcpy(changed, g_mem + DATA, DATA_LEN);
+    const uint32_t keep_softness = rd32(SOFTNESS);
     c = start;
     const unsigned misses = g3n_aocache_misses;
-    g3_opt = dt_native_opt;
-    game(&c);
+    dt_run("miss", &c, orig, game);
     if (g3n_aocache_misses != misses + 1u)
         ++misses_bad;
+    memcpy(g_mem + DATA, changed, DATA_LEN);
+    wr32(SOFTNESS, keep_softness);
+    wr32(COUNTER, counter0);
+    c = start;
+    const unsigned hits2 = g3n_aocache_hits;
+    dt_run("stored in the game, then ready", &c, orig, game);
+    if (g3n_aocache_hits != hits2 + 1u)
+        ++hits_bad;
+    free(changed);
+    memcpy(g_mem + DATA, snap, DATA_LEN);
     wr32(at, keep);
 }
 
@@ -366,7 +380,7 @@ int main(void) {
         one_case();
     printf("cases %u (the walk ran in %u, a leaf mesh against itself in %u), skipped nodes %u; hits %u, misses %u, "
            "unknown %u, IE raised %u; a stored result not found %u, a changed input not missed %u\n",
-           dt_cases / 2u, ran_cases, self_cases, skipped_nodes, g3n_aocache_hits, g3n_aocache_misses,
+           dt_cases / 4u, ran_cases, self_cases, skipped_nodes, g3n_aocache_hits, g3n_aocache_misses,
            g3n_aocache_unknown, ie_cases, hits_bad, misses_bad);
     if (hits_bad || misses_bad)
         ++dt_fail;

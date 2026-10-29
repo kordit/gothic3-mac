@@ -20,9 +20,12 @@
  * mesh's own, or more nodes than any tree has, and the original runs as before (native/ao.c inside it).
  *
  * A ready result is ~/Library/Caches/Gothic3Recomp/ao/<key>.ao, written by the offline tool (native/aobake.c,
- * tools/g3ao.sh): the receiver's disk count, whether the walk ran, the counter it ended with, the x87 exception flags
- * it raised (sticky, so they are or-ed into the status word), and each disk's +0x1c. With one, those are written and
- * the call returns; without one, or with another disk count, the original computes as today. The x87 condition codes
+ * tools/g3ao.sh) or by the game itself the first time it meets an input: the receiver's disk count, whether the walk
+ * ran, the counter it ended with, the x87 exception flags it raised (sticky, so they are or-ed into the status word),
+ * and each disk's +0x1c. With one, those are written and the call returns; without one, or with another disk count,
+ * the original computes as today and its result is stored (session 27: the player's first game had none of the
+ * tool's 250 keys, with other disk counts, so the tool does not yet rebuild the game's input exactly; the log line
+ * says what the input was, to compare). The x87 condition codes
  * are not reproduced (no caller reads them before its own compare), nor EAX, ECX, EDX and XMM0, which the callers
  * never read after the call. The original also builds and frees a small group on the heap; a ready result does not.
  *
@@ -295,6 +298,25 @@ static void store(X86 *c, const Key *k, const Mesh *r, uint32_t ran, uint32_t co
     (void)c;
 }
 
+/* What the log says about an input, to compare a game's with the tool's: the control word, the emitters' disk counts
+ * and the receiver's first disk. */
+static void describe(X86 *c, uint32_t self, uint32_t emitters, const Mesh *r, char *out, size_t n) {
+    int len = snprintf(out, n, "cw %04x, emitters", c->fpu_cw);
+    if (rd32(emitters) == VT_GROUP) {
+        const uint32_t count = rd32(emitters + 0x8u);
+        for (uint32_t i = 0; i < count && i < 8u && len > 0 && len < (int)n; ++i) {
+            Mesh e;
+            const uint32_t m = rd32(rd32(emitters + 0x4u) + 4u * i);
+            len += snprintf(out + len, n - len, " %u", mesh_of(m, &e) ? e.count : 0xffffffffu);
+        }
+    } else
+        len += snprintf(out + len, n - len, " %s", emitters == self ? "itself" : "one mesh");
+    if (r->count && len > 0 && len < (int)n) {
+        const uint32_t d = rd32(r->disks);
+        snprintf(out + len, n - len, ", first disk %08x %08x %08x", rd32(d), rd32(d + 4u), rd32(d + 8u));
+    }
+}
+
 /* eCAOMeshBase::Compute(eCAOMeshBase *emitters) */
 void g3n_10357ba0(X86 *c) {
     const uint32_t self = c->r[1], emitters = rd32(c->r[4] + 4u);
@@ -311,30 +333,34 @@ void g3n_10357ba0(X86 *c) {
         fn_10357ba0(c);
         return;
     }
-    if (g3n_aocache_store) {
-        /* the walk's own flags only, and a counter it can only have reset */
-        const uint16_t sw = c->fpu_sw;
-        const uint32_t counter = rd32(AO_DISK_COUNTER);
-        c->fpu_sw &= (uint16_t)~0x3fu;
-        wr32(AO_DISK_COUNTER, 0xa0c0ffeeu);
-        fn_10357ba0(c);
-        const uint32_t after = rd32(AO_DISK_COUNTER), ran = after != 0xa0c0ffeeu;
-        const uint32_t raised = c->fpu_sw & 0x3fu;
-        c->fpu_sw |= (uint16_t)(sw & 0x3fu);
-        if (!ran)
-            wr32(AO_DISK_COUNTER, counter);
-        store(c, &k, &r, ran, after, raised);
-        return;
-    }
-    if (apply(c, &k, &r)) {
+    if (!g3n_aocache_store && apply(c, &k, &r)) {
         ++g3n_aocache_hits;
         c->eip = rd32(c->r[4]);
         c->r[4] += 8u;
         recomp_return(c);
         return;
     }
-    ++g3n_aocache_misses;
-    fprintf(stderr, "[g3] ao: no ready result for a receiver of %u disks (key %016llx%016llx), computing\n", r.count,
-            (unsigned long long)k.h1, (unsigned long long)k.h2);
+    char what[256];
+    describe(c, self, emitters, &r, what, sizeof what);
+    if (!g3n_aocache_store) {
+        ++g3n_aocache_misses;
+        fprintf(stderr, "[g3] ao: no ready result for a receiver of %u disks (key %016llx%016llx; %s), computing it "
+                "and storing it\n", r.count, (unsigned long long)k.h1, (unsigned long long)k.h2, what);
+    } else
+        fprintf(stderr, "[g3] ao: computing a receiver of %u disks (key %016llx%016llx; %s)\n", r.count,
+                (unsigned long long)k.h1, (unsigned long long)k.h2, what);
+    /* The original computes as before and the result is kept under the key of what it read, so the same input never
+     * has to be computed on this machine again. Only the walk's own flags are recorded, and a counter it can only
+     * have reset. */
+    const uint16_t sw = c->fpu_sw;
+    const uint32_t counter = rd32(AO_DISK_COUNTER);
+    c->fpu_sw &= (uint16_t)~0x3fu;
+    wr32(AO_DISK_COUNTER, 0xa0c0ffeeu);
     fn_10357ba0(c);
+    const uint32_t after = rd32(AO_DISK_COUNTER), ran = after != 0xa0c0ffeeu;
+    const uint32_t raised = c->fpu_sw & 0x3fu;
+    c->fpu_sw |= (uint16_t)(sw & 0x3fu);
+    if (!ran)
+        wr32(AO_DISK_COUNTER, counter);
+    store(c, &k, &r, ran, after, raised);
 }
