@@ -16,6 +16,9 @@ HOST_D9_DEFAULT void host_d9_texture_drop(uint32_t) {}
 HOST_D9_DEFAULT void host_d9_texture_tag(uint32_t, uint64_t) {}
 HOST_D9_DEFAULT void host_d9_texture_upload(uint32_t, uint32_t, uint32_t, const uint8_t *,
                                             uint32_t) {}
+HOST_D9_DEFAULT int host_d9_texture_reads_back(uint32_t) {
+    return 0;
+}
 HOST_D9_DEFAULT int host_d9_texture_read(uint32_t, uint32_t, uint32_t, uint8_t *, uint32_t) {
     return 0;
 }

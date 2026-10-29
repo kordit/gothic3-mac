@@ -468,9 +468,6 @@ extern "C" int host_d9_texture_read_poll(uint32_t ticket, uint8_t *b, uint32_t p
 extern "C" void host_d9_texture_read_forget(uint32_t) {
     ++rb_forgets;
 }
-extern "C" int host_d9_texture_reads_back(uint32_t) {
-    return 0;
-}
 extern "C" int host_d9_texture_read(uint32_t, uint32_t, uint32_t, uint8_t *b, uint32_t pitch) {
     ++rb_sync_reads;
     memset(b, 0x55, (size_t)pitch * 4);
