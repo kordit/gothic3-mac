@@ -261,7 +261,12 @@ static void touch(const char *p) {
         fclose(f);
 }
 
+int g3n_fmodcheck(X86 *c);
+
 int recomp_entry_takeover(X86 *c) {
+    const char *check = getenv("RECOMP_FMOD_CHECK"); /* native/fmodcheck.c, the other tool of this binary */
+    if (check && *check)
+        return g3n_fmodcheck(c);
     const char *dir = getenv("RECOMP_AO_BAKE");
     if (!dir || !*dir)
         return 0;

@@ -22,6 +22,7 @@ enum {
     G3OPT_CREATELOD = 1u << 21, /* createlod: CreateLoD's vertex search through a key map (createlod.c) */
     G3OPT_AO = 1u << 22, /* ao: a SpeedTree's ambient occlusion, the emitter walks of eCAOTreeNode (ao.c) */
     G3OPT_AOCACHE = 1u << 23, /* aocache: a SpeedTree's ambient occlusion from a result computed offline (aocache.c) */
+    G3OPT_FMODOGG = 1u << 24, /* fmodogg: an Ogg Vorbis sample decoded natively before FMOD makes it (fmodogg.c) */
 };
 
 extern volatile uint32_t g3_opt;

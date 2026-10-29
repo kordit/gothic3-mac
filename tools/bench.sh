@@ -26,6 +26,8 @@ case "$scenario" in
   sceny) mode=world; skip=3 ;;
   *) echo "usage: tools/bench.sh swiat|chodzenie|walka|sceny [etykieta]" >&2; exit 2 ;;
 esac
+# BENCH_SECS=<s>: a shorter run, e.g. chodzenie for the first half minute of walking after the load (150).
+secs=${BENCH_SECS:-$secs}
 label=${2:-$scenario-$(date +%m%d-%H%M)}
 out="$PWD/work/bench-$label"
 rm -rf "$out" && mkdir -p "$out" || exit 1

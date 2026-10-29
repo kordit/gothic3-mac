@@ -273,4 +273,9 @@ void g3n_10359e90(X86 *c);
 #define FN_10357ba0 g3n_10357ba0 /* Engine eCAmbientOcclusionPreprocessor::eCAOMeshBase::Compute */
 void g3n_10357ba0(X86 *c);
 
+/* fmodogg (fmodogg.c): an Ogg Vorbis sample decoded natively and handed to FMOD as PCM, at the boundary of fmodex's
+ * export System::createSound (D-053, docs/perf/fmod-ogg.md) */
+#define FN_113bf8d0 g3n_113bf8d0 /* fmodex FMOD::System::createSound */
+void g3n_113bf8d0(X86 *c);
+
 #endif
