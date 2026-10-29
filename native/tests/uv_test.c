@@ -1,8 +1,11 @@
 /* native/tests/uv_test.c - native/uv.c (group uv) against the translated SharedBase code.
  *
  * Build and run (from the checkout root):
- *   NATIVE="uv.c leaf.c" sh native/tests/build.sh uv aux-sharedbase/chunk_10010000.c aux-sharedbase/chunk_10064000.c
- * (leaf.c for the native Normalize GetNormalized calls). G3N_BENCH=1 adds timings.
+ *   NATIVE="uv.c leaf.c rand.c" sh native/tests/build.sh uv aux-sharedbase/chunk_10010000.c \
+ *     aux-sharedbase/chunk_10064000.c aux-sharedbase/chunk_10084000.c aux-sharedbase/chunk_10074000.c \
+ *     aux-sharedbase/chunk_10070000.c aux-sharedbase/chunk_1006c000.c
+ * (leaf.c for the native Normalize GetNormalized calls; the CRT chunks and rand.c for what the translated originals
+ * reach through them). G3N_BENCH=1 adds timings.
  *
  * Each leaf from a random context (difftest_rp.h: scratch registers, x87 top with live values,
  * stale tags, precision and rounding control, XMM), on ordinary values, signed zeros, NaN,
