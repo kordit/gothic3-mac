@@ -27,6 +27,9 @@
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#ifdef __APPLE__
+#include <os/lock.h>
+#endif
 #include <unordered_map>
 
 extern "C" bool recomp_host_work_begin();
@@ -187,8 +190,21 @@ std::mutex g_lock; // the core, the find handles, the buffered entries
 
 // ---- files ----
 
+// The streams' own locks, taken on every read: the world's objects are read a few bytes a call, millions of calls while
+// a sector loads, and a pthread mutex pair per call was most of s_read's time in the player's stutters (29.10:
+// 232 of 541 samples). Uncontended, an unfair lock is a fraction of that; a waiter still sleeps.
+#ifdef __APPLE__
+struct StreamLock {
+    os_unfair_lock l = OS_UNFAIR_LOCK_INIT;
+    void lock() { os_unfair_lock_lock(&l); }
+    void unlock() { os_unfair_lock_unlock(&l); }
+};
+#else
+using StreamLock = std::mutex;
+#endif
+
 struct Shared { // a buffered entry's bytes, shared by its open streams as the entry's memory stream is
-    std::mutex m;
+    StreamLock m;
     std::vector<uint8_t> bytes;
 };
 std::unordered_map<const g3fs::Node *, std::weak_ptr<Shared>> g_buffered;
@@ -204,18 +220,32 @@ struct File {
     std::shared_ptr<g3fs::Pack> pack;
     g3fs::Node *node = nullptr;
     std::shared_ptr<Shared> mem;
-    std::mutex pos_m;
+    StreamLock pos_m;
     uint64_t pos = 0;
 };
 std::mutex g_files_lock;
 std::unordered_map<uint32_t, std::shared_ptr<File>> g_files; // by the file interface's guest address
+// Bumped under g_files_lock by every change of g_files: a thread's last lookup (file_at) stands while it is unchanged.
+std::atomic<uint64_t> g_files_gen{1};
 
 uint32_t g_vb_file, g_vt_file, g_vt_base, g_vt_stream; // shared by every file object
 
 std::shared_ptr<File> file_at(uint32_t f) {
+    // Each thread keeps its last answer: a stream is read many times in a row, and the map's lock per call cost as
+    // much as the read. The answer stands while g_files has not changed since, so an address that was released (and
+    // perhaps given to another file) is looked up again.
+    thread_local uint32_t last_addr = 0;
+    thread_local uint64_t last_gen = 0;
+    thread_local std::shared_ptr<File> last;
+    const uint64_t gen = g_files_gen.load(std::memory_order_acquire);
+    if (last_addr == f && last_gen == gen)
+        return last;
     std::lock_guard<std::mutex> g(g_files_lock);
     auto it = g_files.find(f);
-    return it == g_files.end() ? nullptr : it->second;
+    last_addr = f;
+    last_gen = g_files_gen.load(std::memory_order_relaxed);
+    last = it == g_files.end() ? nullptr : it->second;
+    return last;
 }
 uint32_t file_new(std::shared_ptr<File> file) {
     const uint32_t f = heap_alloc_kit(16, true);
@@ -227,6 +257,7 @@ uint32_t file_new(std::shared_ptr<File> file) {
     wr32(f + 12u, g_vt_stream);
     std::lock_guard<std::mutex> g(g_files_lock);
     g_files[f] = std::move(file);
+    g_files_gen.fetch_add(1, std::memory_order_release);
     return f;
 }
 
@@ -265,6 +296,7 @@ void f_release(X86 *c) {
         {
             std::lock_guard<std::mutex> g(g_files_lock);
             g_files.erase(addr);
+            g_files_gen.fetch_add(1, std::memory_order_release);
         }
         if (f->kind == File::PHYSICAL && f->handle != 0xffffffffu)
             win(c, "CloseHandle", {f->handle});
@@ -287,7 +319,7 @@ uint64_t length_of(X86 *c, File &f) {
         return 0;
     }
     if (f.kind == File::BUFFERED) {
-        std::lock_guard<std::mutex> g(f.mem->m);
+        std::lock_guard<StreamLock> g(f.mem->m);
         return f.mem->bytes.size();
     }
     return f.node->stored;
@@ -311,7 +343,7 @@ void s_position(X86 *c) { // (int64 *)
         ret(c, f->handle != 0xffffffffu && win(c, "SetFilePointerEx", {f->handle, 0, 0, out, 1}) == 1);
         return;
     }
-    std::lock_guard<std::mutex> g(f->pos_m);
+    std::lock_guard<StreamLock> g(f->pos_m);
     wr32(out, (uint32_t)f->pos);
     wr32(out + 4u, (uint32_t)(f->pos >> 32));
     ret(c, 1);
@@ -340,7 +372,7 @@ void s_seek(X86 *c) { // (lo, hi, origin)
         ret(c, 0);
         return;
     }
-    std::lock_guard<std::mutex> g(f->pos_m);
+    std::lock_guard<StreamLock> g(f->pos_m);
     f->pos = (uint64_t)to;
     ret(c, 1);
 }
@@ -363,9 +395,9 @@ void s_read(X86 *c) { // (buf, n)
         ret(c, 0);
         return;
     }
-    std::unique_lock<std::mutex> g(f->pos_m);
+    std::unique_lock<StreamLock> g(f->pos_m);
     if (f->kind == File::BUFFERED) { // 10da6d90 on the memory stream: up to its end
-        std::lock_guard<std::mutex> m(f->mem->m);
+        std::lock_guard<StreamLock> m(f->mem->m);
         const uint64_t size = f->mem->bytes.size();
         const uint32_t k = f->pos < size ? (uint32_t)std::min<uint64_t>(n, size - f->pos) : 0u;
         std::memcpy(g_mem + buf, f->mem->bytes.data() + f->pos, k);
@@ -416,8 +448,8 @@ void s_write(X86 *c) { // (buf, n)
         ret(c, 0);
         return;
     }
-    std::lock_guard<std::mutex> g(f->pos_m); // 10da6df0 on the memory stream, which grows
-    std::lock_guard<std::mutex> m(f->mem->m);
+    std::lock_guard<StreamLock> g(f->pos_m); // 10da6df0 on the memory stream, which grows
+    std::lock_guard<StreamLock> m(f->mem->m);
     if (f->mem->bytes.size() < f->pos + n)
         f->mem->bytes.resize(f->pos + n);
     std::memcpy(f->mem->bytes.data() + f->pos, g_mem + buf, n);
