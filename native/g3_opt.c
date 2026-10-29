@@ -1,7 +1,7 @@
 /* native/g3_opt.c - the switches for Gothic 3's native replacements.
  *
  * G3OPT=<groups> in the trace control file (RECOMP_TRACE_CONTROL, read once a second) turns
- * groups on while the game runs: a comma list of rand, particles, d3d, str, mem, vec, scene, leaf, shadow, pdo, move, uv, exec, zlib, anim, createlod, ao, "all"
+ * groups on while the game runs: a comma list of rand, particles, d3d, str, mem, vec, scene, leaf, shadow, pdo, move, uv, exec, zlib, anim, createlod, ao, aocache, "all"
  * or "none", and "-name" to drop one ("all,-pdo"). Without the key the start value stays: RECOMP_G3OPT, else
  * G3OPT_DEFAULT, the one setup the player plays and every bench measures (session 19). Each group's
  * g3n_ functions run their native code only while its bit is set (a diagnosis may turn one off; the
@@ -17,7 +17,7 @@ volatile uint32_t g3_opt = 0xffffffffu; /* g3_opt_init sets the start value */
 static const struct {
     const char *name;
     uint32_t bit;
-} groups[] = {{"rand", G3OPT_RAND}, {"particles", G3OPT_PARTICLES}, {"d3d", G3OPT_D3D}, {"str", G3OPT_STR}, {"mem", G3OPT_MEM}, {"vec", G3OPT_VEC}, {"scene", G3OPT_SCENE}, {"leaf", G3OPT_LEAF}, {"shadow", G3OPT_SHADOW}, {"pdo", G3OPT_PDO}, {"move", G3OPT_MOVE}, {"anim", G3OPT_ANIM}, {"uv", G3OPT_UV}, {"exec", G3OPT_EXEC}, {"zlib", G3OPT_ZLIB}, {"createlod", G3OPT_CREATELOD}, {"ao", G3OPT_AO}};
+} groups[] = {{"rand", G3OPT_RAND}, {"particles", G3OPT_PARTICLES}, {"d3d", G3OPT_D3D}, {"str", G3OPT_STR}, {"mem", G3OPT_MEM}, {"vec", G3OPT_VEC}, {"scene", G3OPT_SCENE}, {"leaf", G3OPT_LEAF}, {"shadow", G3OPT_SHADOW}, {"pdo", G3OPT_PDO}, {"move", G3OPT_MOVE}, {"anim", G3OPT_ANIM}, {"uv", G3OPT_UV}, {"exec", G3OPT_EXEC}, {"zlib", G3OPT_ZLIB}, {"createlod", G3OPT_CREATELOD}, {"ao", G3OPT_AO}, {"aocache", G3OPT_AOCACHE}};
 
 static uint32_t parse(const char *list, uint32_t value) {
     char word[32];

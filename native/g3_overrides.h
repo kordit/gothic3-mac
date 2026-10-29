@@ -268,4 +268,9 @@ void g3n_1035a0b0(X86 *c);
 #define FN_10359e90 g3n_10359e90 /* Engine eCAOTreeNode::ComputeOcclusionFactor */
 void g3n_10359e90(X86 *c);
 
+/* aocache (aocache.c): a SpeedTree's ambient occlusion from a result computed once, offline, at the boundary of the
+ * whole eCAOMeshBase::Compute (D-043 point 2, D-052, docs/perf/ao-drzew.md) */
+#define FN_10357ba0 g3n_10357ba0 /* Engine eCAmbientOcclusionPreprocessor::eCAOMeshBase::Compute */
+void g3n_10357ba0(X86 *c);
+
 #endif
