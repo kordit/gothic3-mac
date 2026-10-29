@@ -30,6 +30,15 @@ int recomp_readable_path(const char *guest_path, char *out, size_t out_len);
  * guest scheduler baton. */
 void recomp_files_changed(void);
 
+/* Optional: called on the main guest thread once every static import of the
+ * executable has run its DLL_PROCESS_ATTACH, before the executable's entry.
+ * Non-zero means the native code did its own work with the modules (an
+ * offline tool built from the game) and the entry does not run; the process
+ * then ends as if the guest had returned from it. The argument is the
+ * thread's X86 context. The default returns zero. */
+struct X86;
+int recomp_entry_takeover(struct X86 *c);
+
 /* Offer a DirectDraw display mode, as the host does for its own modes. */
 int ddraw_add_mode(int w, int h, int bpp);
 

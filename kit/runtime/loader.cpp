@@ -942,6 +942,13 @@ std::string loader_hash_file(const char *path) {
 // cpu.cpp: RECOMP_TRACE_CALLS, once every module has registered.
 extern "C" void recomp_trace_calls_install(void);
 
+// native_seam.h: a game's native code may take the process over once the static imports have attached, instead of
+// the executable's entry (an offline tool built from the game, which needs the modules' code but not the game).
+extern "C" __attribute__((weak)) int recomp_entry_takeover(X86 *c) {
+    (void)c;
+    return 0;
+}
+
 void run_entry(X86 *c) {
     if (!g_entry) {
         LOGW("run_entry: no image loaded");
@@ -994,6 +1001,11 @@ void run_entry(X86 *c) {
             ++count;
         }
         LOGV("ran %u TLS process-attach callbacks", count);
+        if (recomp_entry_takeover(c)) {
+            LOGW("run_entry: the game's native code took the process over; the entry did not run");
+            sched_set_guest_thread(false);
+            return;
+        }
         c->eip = g_entry;
         recomp_run(c, g_entry);
     } else
