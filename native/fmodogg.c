@@ -11,7 +11,8 @@
  * eCAudioSound::Create sets, this reads the file through the same callbacks FMOD would use (the ones
  * eCAudioSystem::Create 102b71d0 hands to System::setFileSystem: open 102b6f60, read 102b6fc0, close 102b70a0), and if
  * it is an Ogg Vorbis stream of one or two channels decodes it here with libvorbisfile 1.3.7 the way FMOD's codec
- * does (ov_read with little endian, 16 bits, signed: fmodex 11373ae0), then gives the PCM to the original
+ * does (ov_read with little endian, 16 bits, signed: fmodex 11373ae0), in pieces of at least two seconds on the
+ * performance cores at once (one decoder took 88 ms for the 82 s of sfx_env_fire_01.wav), then gives the PCM to the original
  * createSound as memory: OPENMEMORY | OPENRAW with the length, channels, rate and PCM16 in the CREATESOUNDEXINFO
  * (0x88 bytes, fmodex 11410f90 copies that many). FMOD copies the PCM into its sample and the buffers are freed.
  * The sample has the same length, channels, rate and format as FMOD's own decoding; the samples themselves come from
@@ -23,9 +24,11 @@
 #include "g3_opt.h"
 #include "third_party/vorbis/vorbisfile.h"
 
+#include <dispatch/dispatch.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/sysctl.h>
 #include <time.h>
 
 void fn_113bf8d0(X86 *c);
@@ -79,9 +82,50 @@ static long m_tell(void *src) {
     return (long)((Mem *)src)->at;
 }
 
-/* The whole stream as 16-bit little endian signed PCM, as FMOD's codec reads it. 0 when this file is not one this
- * does (not Vorbis, not one or two channels, a format change between chained streams, an error). */
-int g3n_fmodogg_decode(const uint8_t *file, size_t size, uint8_t **pcm, uint32_t *bytes, int *channels, int *rate) {
+/* Samples [from, to) of the stream, each part with its own decoder: ov_pcm_seek decodes the packet before `from` for
+ * the window's overlap, so a part's samples are the ones a decoder going from the start gives (tools/g3fmodcheck.sh
+ * compares the two for every file). */
+typedef struct {
+    const uint8_t *file;
+    size_t size;
+    ogg_int64_t from, to;
+    int channels, ok;
+    uint8_t *out;
+} Part;
+static void decode_part(void *parts, size_t i) {
+    Part *p = (Part *)parts + i;
+    Mem m = {p->file, p->size, 0};
+    const ov_callbacks cb = {m_read, m_seek, NULL, m_tell};
+    OggVorbis_File vf;
+    p->ok = 0;
+    if (ov_open_callbacks(&m, &vf, NULL, 0, cb) < 0)
+        return;
+    const size_t want = (size_t)(p->to - p->from) * (size_t)p->channels * 2u;
+    size_t have = 0;
+    int ok = p->from == 0 || ov_pcm_seek(&vf, p->from) == 0;
+    while (ok && have < want) {
+        int bs;
+        const long n =
+            ov_read(&vf, (char *)p->out + have, (int)(want - have < 0x10000 ? want - have : 0x10000), 0, 2, 1, &bs);
+        if (n == 0)
+            break;
+        if (n < 0) {
+            if (n == OV_HOLE) /* FMOD's codec reads past a hole the same way: the next call goes on */
+                continue;
+            ok = 0;
+            break;
+        }
+        have += (size_t)n;
+    }
+    p->ok = ok && have == want;
+    ov_clear(&vf);
+}
+
+/* The whole stream as 16-bit little endian signed PCM, as FMOD's codec reads it, in `parts` pieces decoded at once
+ * (0: one per performance core, at least two seconds each). 0 when this file is not one this does (not Vorbis, not
+ * one or two channels, a format change between chained streams, an error). */
+int g3n_fmodogg_decode_parts(const uint8_t *file, size_t size, int parts, uint8_t **pcm, uint32_t *bytes,
+                             int *channels, int *rate) {
     if (size < 4 || memcmp(file, "OggS", 4))
         return 0;
     Mem m = {file, size, 0};
@@ -97,37 +141,50 @@ int g3n_fmodogg_decode(const uint8_t *file, size_t size, uint8_t **pcm, uint32_t
         const vorbis_info *v = ov_info(&vf, i);
         ok = v && v->channels == vi->channels && v->rate == vi->rate;
     }
-    uint8_t *out = NULL;
-    size_t have = 0;
-    if (ok) {
-        const size_t want = (size_t)total * (size_t)vi->channels * 2u;
-        out = malloc(want ? want : 1);
-        ok = out != NULL;
-        while (ok && have < want) {
-            int bs;
-            const long n = ov_read(&vf, (char *)out + have, (int)(want - have < 0x10000 ? want - have : 0x10000), 0, 2,
-                                   1, &bs);
-            if (n == 0)
-                break;
-            if (n < 0) {
-                if (n == OV_HOLE) /* FMOD's codec reads past a hole the same way: the next call goes on */
-                    continue;
-                ok = 0;
-                break;
-            }
-            have += (size_t)n;
+    const int ch = ok ? vi->channels : 0;
+    const long hz = ok ? vi->rate : 0;
+    ov_clear(&vf);
+    if (!ok)
+        return 0;
+    if (parts <= 0) {
+        static int cores;
+        if (!cores) {
+            size_t n = sizeof cores;
+            if (sysctlbyname("hw.perflevel0.physicalcpu", &cores, &n, NULL, 0) || cores < 1)
+                cores = 1;
         }
-        ok = ok && have == want;
+        const ogg_int64_t most = total / (2 * (ogg_int64_t)(hz > 0 ? hz : 44100));
+        parts = most < 1 ? 1 : most < cores ? (int)most : cores;
     }
+    const size_t want = (size_t)total * (size_t)ch * 2u;
+    uint8_t *out = malloc(want ? want : 1);
+    Part part[64];
+    if (parts > 64)
+        parts = 64;
+    if (!out)
+        return 0;
+    for (int i = 0; i < parts; ++i) {
+        const ogg_int64_t from = total * i / parts, to = total * (i + 1) / parts;
+        part[i] = (Part){file, size, from, to, ch, 0, out + (size_t)from * (size_t)ch * 2u};
+    }
+    if (parts == 1)
+        decode_part(part, 0);
+    else
+        dispatch_apply_f((size_t)parts, dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), part, decode_part);
+    for (int i = 0; i < parts; ++i)
+        ok = ok && part[i].ok;
     if (ok) {
         *pcm = out;
-        *bytes = (uint32_t)have;
-        *channels = vi->channels;
-        *rate = (int)vi->rate;
+        *bytes = (uint32_t)want;
+        *channels = ch;
+        *rate = (int)hz;
     } else
         free(out);
-    ov_clear(&vf);
     return ok;
+}
+
+int g3n_fmodogg_decode(const uint8_t *file, size_t size, uint8_t **pcm, uint32_t *bytes, int *channels, int *rate) {
+    return g3n_fmodogg_decode_parts(file, size, 0, pcm, bytes, channels, rate);
 }
 
 /* The file FMOD would open for `name`, through the game's callbacks, into host memory. */

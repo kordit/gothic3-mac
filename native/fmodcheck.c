@@ -8,7 +8,8 @@
  * IGNORETAGS) and the file in memory, so fmodex decodes it with its own libvorbis; and with fmodogg.c's PCM as
  * OPENMEMORY | OPENRAW, as the game's call does now. Then for both: the result, the length in PCM bytes, the format,
  * the channels, the bits, the default frequency, and the PCM through Sound::lock: how many 16-bit samples differ and
- * by how much at most. One line per file to <folder>/results.tsv as soon as it is done; <folder>/started.txt names a
+ * by how much at most; and whether fmodogg.c's decoding in parts at once gives the bytes one decoder from the start
+ * gives. One line per file to <folder>/results.tsv as soon as it is done; <folder>/started.txt names a
  * file before it begins, so one that crashed the tool is left out on the next run. */
 #include "chunk.h"
 #include "g3_opt.h"
@@ -22,6 +23,8 @@ uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) __asm_
 uint32_t heap_alloc(uint32_t size, _Bool zero, uint32_t align) __asm__("__Z10heap_allocjbj");
 _Bool heap_free(uint32_t addr) __asm__("__Z9heap_freej");
 int g3n_fmodogg_decode(const uint8_t *file, size_t size, uint8_t **pcm, uint32_t *bytes, int *channels, int *rate);
+int g3n_fmodogg_decode_parts(const uint8_t *file, size_t size, int parts, uint8_t **pcm, uint32_t *bytes,
+                             int *channels, int *rate);
 
 #define F_SYSTEM_CREATE 0x113ddc50u /* FMOD_System_Create(FMOD_SYSTEM **) */
 #define F_SET_OUTPUT 0x113bed10u    /* System::setOutput(FMOD_OUTPUTTYPE) */
@@ -157,7 +160,7 @@ int g3n_fmodcheck(X86 *c) {
     if (!done[0])
         fprintf(res, "name\tbytes\tresult\tresult_native\tlength\tlength_native\ttype\ttype_native\tformat\t"
                      "format_native\tchannels\tchannels_native\tbits\tbits_native\tfreq\tfreq_native\tsamples_differ\t"
-                     "max_diff\tms_fmod\tms_native\n");
+                     "max_diff\tms_fmod\tms_native\tparts_same\n");
 
     const uint32_t scr = heap_alloc(0x40u, 1, 16);
     uint32_t r = guest_call(c, F_SYSTEM_CREATE, (const uint32_t[]){scr}, 1);
@@ -224,6 +227,15 @@ int g3n_fmodcheck(X86 *c) {
         const double t0 = now_ms();
         const int ok = g3n_fmodogg_decode(file, (size_t)size, &pcm, &bytes, &channels, &rate);
         const double t1 = now_ms();
+        int parts_same = -1;
+        if (ok) {
+            uint8_t *one = NULL;
+            uint32_t one_bytes = 0;
+            int one_ch = 0, one_rate = 0;
+            parts_same = g3n_fmodogg_decode_parts(file, (size_t)size, 1, &one, &one_bytes, &one_ch, &one_rate) &&
+                         one_bytes == bytes && one_ch == channels && one_rate == rate && !memcmp(one, pcm, bytes);
+            free(one);
+        }
         free(file);
         memset(&b, 0, sizeof b);
         if (ok) {
@@ -255,12 +267,12 @@ int g3n_fmodcheck(X86 *c) {
         float fa, fb;
         memcpy(&fa, &a.freq_bits, 4);
         memcpy(&fb, &b.freq_bits, 4);
-        fprintf(res, "%s\t%ld\t%u\t%d\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%.0f\t%.0f\t%ld\t%ld\t%.2f\t%.2f\n", name,
+        fprintf(res, "%s\t%ld\t%u\t%d\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%u\t%.0f\t%.0f\t%ld\t%ld\t%.2f\t%.2f\t%d\n", name,
                 size, a.result, (int)b.result, a.length, b.length, a.type, b.type, a.format, b.format, a.channels,
-                b.channels, a.bits, b.bits, fa, fb, differ, maxd, a.ms, b.ms);
+                b.channels, a.bits, b.bits, fa, fb, differ, maxd, a.ms, b.ms, parts_same);
         fflush(res);
         const int match = ok && !a.result && !b.result && a.length == b.length && a.format == b.format &&
-                          a.channels == b.channels && a.bits == b.bits && fa == fb && differ >= 0;
+                          a.channels == b.channels && a.bits == b.bits && fa == fb && differ >= 0 && parts_same == 1;
         same += match;
         bad += ok && !match;
         fmod_ms += a.ms;
