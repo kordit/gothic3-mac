@@ -3009,6 +3009,28 @@ static void test_managed_levels_gpu_only(uint32_t dev) {
             }
             call_method(tex, 2);
         }
+    // D3DUSAGE_DYNAMIC with the managed pool (World Texture Mix's 4096x4096 images): on the GPU alone as well. With
+    // the default pool it keeps its host copy. A D3DLOCK_DISCARD lock of a written level reads nothing back.
+    reads_back_answer = 1;
+    CHECK(call_method(dev, 23, {8, 8, 1, 0x200, 0x35545844u, 1, sc(0x600), 0}) == 0); // DXT5, dynamic, managed
+    const uint32_t dyn = rd32(sc(0x600));
+    ComObj *dl = com_get(com_this(dyn)->surfaces[0]);
+    CHECK(dl && dl->gpu_only && dl->blob.empty() && dl->pixels_bytes == 64);
+    CHECK(call_method(dyn, 19, {0, sc(0x660), 0, 0}) == 0);
+    CHECK(call_method(dyn, 20, {0}) == 0);
+    const int reads_before = rb_sync_reads;
+    CHECK(call_method(dyn, 19, {0, sc(0x660), 0, 0x2000}) == 0); // D3DLOCK_DISCARD
+    CHECK(rb_sync_reads == reads_before && dl->gpu_only);
+    CHECK(call_method(dyn, 20, {0}) == 0);
+    CHECK(call_method(dyn, 19, {0, sc(0x660), 0, 0}) == 0); // without it the level is read back
+    CHECK(rb_sync_reads == reads_before + 1);
+    CHECK(call_method(dyn, 20, {0}) == 0);
+    call_method(dyn, 2);
+    CHECK(call_method(dev, 23, {8, 8, 1, 0x200, 0x35545844u, 0, sc(0x600), 0}) == 0); // dynamic, default pool
+    const uint32_t def = rd32(sc(0x600));
+    ComObj *fl = com_get(com_this(def)->surfaces[0]);
+    CHECK(fl && !fl->gpu_only && fl->blob.size() == 64);
+    call_method(def, 2);
     reads_back_answer = 0;
     record_2d_uploads = false;
     uploads_2d.clear();

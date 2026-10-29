@@ -1352,11 +1352,11 @@ static bool is_buffer(const ComObj *o) {
     return o->kind == K_D3D9VB || o->kind == K_D3D9IB;
 }
 
-static uint32_t gpu_only_lock(ComObj *s);
+static uint32_t gpu_only_lock(ComObj *s, uint32_t flags);
 static void gpu_only_unlock(ComObj *s);
 static uint32_t stage_lock(ComObj *o, uint32_t flags = 0) {
     if (o && o->gpu_only)
-        return gpu_only_lock(o);
+        return gpu_only_lock(o, flags);
     if (!o || o->blob.empty())
         return 0;
     if (o->lock_count == 0)
@@ -1783,15 +1783,17 @@ static GpuMirror &gpu_define(ComObj *o) {
     return m;
 }
 
-// A level whose bytes are only on the GPU (ComObj::gpu_only).
-static uint32_t gpu_only_lock(ComObj *s) {
+// A level whose bytes are only on the GPU (ComObj::gpu_only). D3DLOCK_DISCARD (0x2000) asks for none of the old
+// bytes, as Direct3D 9 defines it, so a written level is not read back for it.
+static uint32_t gpu_only_lock(ComObj *s, uint32_t flags) {
     if (s->lock_count++ == 0) {
+        const bool discard = (flags & 0x2000u) != 0;
         s->pixels = heap_alloc(s->pixels_bytes, !s->gpu_written, 16);
         if (!s->pixels) {
             s->lock_count = 0;
             return 0;
         }
-        if (s->gpu_written) {
+        if (s->gpu_written && !discard) {
             const HostD9Surface r = surface_ref(s);
             host_d9_texture_read(r.id, r.face, r.level, gm_ptr(s->pixels), s->pitch);
         }
@@ -2134,8 +2136,11 @@ void Dev_CreateTexture(X86 *c) {
     resource_usage()[tex->id] = usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL);
     // A managed texture that is only sampled (Gothic 3's images, eCGfxImageData::Read 102f2f40) keeps its levels on
     // the GPU alone: the shim's copy of every level was a second full copy in host memory. Its levels get no host
-    // copy from the start (player's game 29.10: a zeroed copy made and dropped here was 141 samples of DoLoad).
-    const bool gpu_only = arg(c, 6) == 1 && !(usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL | 0x200u)) && gpu_on();
+    // copy from the start. D3DUSAGE_DYNAMIC (0x200) does not change that: Direct3D 9 refuses it with the managed pool,
+    // so it means nothing here. Gothic 3 with World Texture Mix asks for it on 131 textures of 4096x4096 (their .ximg
+    // headers carry it, Engine sets the pool to managed), about 21 MB each, and their host copies (zeroed at the
+    // create, copied in at each lock and back at each unlock) were about 490 of DoLoad's 1392 samples (29.10, 15:58).
+    const bool gpu_only = arg(c, 6) == 1 && !(usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL)) && gpu_on();
     for (uint32_t l = 0; l < levels && l < 16; ++l) {
         ComObj *s = make_surface(dev, std::max(w >> l, 1u), std::max(h >> l, 1u), fmt, !gpu_only);
         if (!s)
@@ -4512,7 +4517,7 @@ void Surf_LockRect(X86 *c) {
         com_ret(c, D3DERR_WASSTILLDRAWING);
         return;
     }
-    uint32_t staged = stage_lock(s);
+    uint32_t staged = stage_lock(s, arg(c, 3));
     wr32(out, s->pitch);
     wr32(out + 4, staged);
     com_ret(c, staged ? D3D_OK9 : E_OUTOFMEMORY);
@@ -4670,7 +4675,7 @@ void Tex_LockRect(X86 *c) {
         com_ret(c, D3DERR_WASSTILLDRAWING);
         return;
     }
-    uint32_t staged = stage_lock(s);
+    uint32_t staged = stage_lock(s, arg(c, 4));
     {
         // RECOMP_D3D9_DRAWS diagnostics: who locks each texture of 256+ texels wide, once per texture.
         static const bool on = recomp_env("D3D9_DRAWS") != nullptr;
