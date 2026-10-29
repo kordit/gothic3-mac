@@ -137,6 +137,84 @@ bool resolve_in(const std::string &root, const std::string &rel, bool create, bo
     *out = host;
     return true;
 }
+
+// What a read's walk learns about the folders, by host path: a directory's names (lower case -> its spelling, the
+// first in the listing's order, as match_name takes it) and whether a path is a directory. The walk listed every
+// directory on the way in every tier for every read, and a game may ask about a new path on every open: Gothic 3's
+// FileSystem looks for a loose file before each archive entry, and in the player's game (29.10) the listings were
+// 732 samples under the frame's texture loads. Everything is dropped when win32_dir_generation moves, which every
+// create, delete, rename, directory and tier change through the kit does, a write's walk here, and a native
+// override's own change through recomp_files_changed; a file changed by another program is seen after the next one.
+struct DirCache {
+    std::mutex m;
+    uint64_t generation = 0;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>> names; // only folders that list
+    std::unordered_map<std::string, bool> is_dir;
+};
+DirCache &dir_cache() {
+    static DirCache c;
+    return c;
+}
+constexpr size_t DIR_CACHE_MAX = 1u << 16; // folders and paths each; past that it starts over
+int collect_name(const char *name, void *user) {
+    ((std::unordered_map<std::string, std::string> *)user)->emplace(lower(name), name);
+    return 0;
+}
+// Under c.m: the names of `dir`, null when it does not list.
+const std::unordered_map<std::string, std::string> *names_of(DirCache &c, const std::string &dir) {
+    auto it = c.names.find(dir);
+    if (it != c.names.end())
+        return &it->second;
+    std::unordered_map<std::string, std::string> names;
+    if (os_listdir(dir.c_str(), collect_name, &names) != 0)
+        return nullptr; // not kept: a folder that does not list now is looked at again, as the walk did
+    if (c.names.size() >= DIR_CACHE_MAX)
+        c.names.clear();
+    return &c.names.emplace(dir, std::move(names)).first->second;
+}
+bool is_dir(DirCache &c, const std::string &path) {
+    auto it = c.is_dir.find(path);
+    if (it != c.is_dir.end())
+        return it->second;
+    OsStat st;
+    const bool d = os_stat(path.c_str(), &st) == 0 && st.is_dir;
+    if (c.is_dir.size() >= DIR_CACHE_MAX)
+        c.is_dir.clear();
+    c.is_dir.emplace(path, d);
+    return d;
+}
+// resolve_in(root, rel, false, false, out) from what the cache knows: the same answer while nothing changed.
+bool read_walk(const std::string &root, const std::string &rel, std::string *out) {
+    if (root.empty())
+        return false;
+    std::vector<std::string> comps;
+    if (!split(rel, &comps))
+        return false;
+    DirCache &c = dir_cache();
+    std::lock_guard<std::mutex> g(c.m);
+    const uint64_t generation = win32_dir_generation();
+    if (c.generation != generation) {
+        c.names.clear();
+        c.is_dir.clear();
+        c.generation = generation;
+    }
+    if (!is_dir(c, root))
+        return false;
+    std::string host = root;
+    for (size_t i = 0; i < comps.size(); ++i) {
+        const auto *names = names_of(c, host);
+        if (!names)
+            return false;
+        auto it = names->find(lower(comps[i]));
+        if (it == names->end())
+            return false;
+        host += "/" + it->second;
+        if (i + 1 < comps.size() && !is_dir(c, host))
+            return false;
+    }
+    *out = host;
+    return true;
+}
 } // namespace
 // Remaster run 29 (NFSMW modding stage 1, review/run29/modding-design.md 2.3): a pushed LAYER never serves program
 // files (Windows executables, libraries, script plugins, shortcuts): a mod folder cannot place one where the game or
@@ -325,62 +403,20 @@ uint32_t mods_overlay_layer_count() {
     return (uint32_t)layers().size();
 }
 
-namespace {
-// What a read or a listing resolved to, by the relative path as asked ("" for nothing found). The walk lists every
-// directory on the way in every tier, and a game may ask about a path on every open: Gothic 3's FileSystem looks for a
-// loose file before each archive entry, and in the player's game (29.10) this walk was 732 samples under the frame's
-// texture loads, opendir and getdirentries most of them. Everything is dropped when win32_dir_generation moves, which
-// every create, delete, rename, directory and tier change through the kit does, and a native override's own through
-// recomp_files_changed; a file changed by another program is seen after the next such change.
-struct ReadCache {
-    std::mutex m;
-    uint64_t generation = 0;
-    std::unordered_map<std::string, std::string> found;
-};
-ReadCache &read_cache() {
-    static ReadCache c;
-    return c;
-}
-constexpr size_t READ_CACHE_MAX = 1u << 18; // a game's every file, about; past that it starts over
-} // namespace
-
 bool mods_cpp_overlay_resolve(const std::string &rel, int op, std::string *out) {
     if (!out)
         return false;
     out->clear();
     if (op == WIN32_FILE_READ || op == WIN32_FILE_LIST) {
-        ReadCache &rc = read_cache();
-        const uint64_t generation = win32_dir_generation();
-        {
-            std::lock_guard<std::mutex> g(rc.m);
-            if (rc.generation != generation) {
-                rc.found.clear();
-                rc.generation = generation;
-            }
-            auto it = rc.found.find(rel);
-            if (it != rc.found.end()) {
-                *out = it->second;
-                return !out->empty();
-            }
-        }
         const auto roots = roots_snapshot();
         const bool refused = mods_overlay_layer_name_refused(rel);
-        bool hit = false;
-        for (size_t i = 0; i < roots.size() && !hit; ++i) {
+        for (size_t i = 0; i < roots.size(); ++i) {
             if (refused && i > 0 && i + 1 < roots.size())   // a layer root (run 29)
                 continue;
-            hit = resolve_in(roots[i], rel, false, false, out);
+            if (read_walk(roots[i], rel, out))
+                return true;
         }
-        if (!hit)
-            out->clear();
-        // Kept only if nothing changed during the walk.
-        std::lock_guard<std::mutex> g(rc.m);
-        if (rc.generation == generation && win32_dir_generation() == generation) {
-            if (rc.found.size() >= READ_CACHE_MAX)
-                rc.found.clear();
-            rc.found.emplace(rel, *out);
-        }
-        return hit;
+        return false;
     }
     const auto roots = roots_snapshot();
     if (rel.empty())
@@ -438,7 +474,7 @@ void mods_cpp_overlay_list(const std::string &rel,
     const auto roots = roots_snapshot();
     for (size_t i = 0; i < roots.size(); ++i) {
         std::string host;
-        if (!resolve_in(roots[i], rel, false, false, &host))
+        if (!read_walk(roots[i], rel, &host))
             continue;
         ListCollector collect{&seen, out, host, i > 0 && i + 1 < roots.size()};
         os_listdir(host.c_str(), collect_listing, &collect);

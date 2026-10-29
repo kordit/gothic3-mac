@@ -380,9 +380,10 @@ MOD_TEST_SUITE(overlay_layer_refuses_program_files) {
     MOD_CHECK(!mods_overlay_layer_name_refused("exe"));
 }
 
-// A read's answer is remembered until the kit sees a change: the guest's own create and delete, a write's copy-up, and
-// a native override's recomp_files_changed each make the next read walk again. A file put in place by anyone else is
-// seen only after such a change; that is how the remembered answer shows it is in use.
+// What a read learns about the folders (their names, which paths are directories) is remembered until the kit sees a
+// change: the guest's own create and delete, a write's copy-up, and a native override's recomp_files_changed each make
+// the next read list again. A file put in place by anyone else is seen only after such a change; that is how the
+// remembered listing shows it is in use.
 MOD_TEST_SUITE(overlay_reads_remembered_until_a_change) {
     layers();
     X86 *c = loader_context();
