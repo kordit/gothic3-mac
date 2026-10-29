@@ -75,6 +75,8 @@ fi
 printf '%b' "$steps" > "$out/bench.smoke"
 printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$out/bench.smoke"
 printf 'FRAMES=10\n' > "$out/bench.ctl"
+# BENCH_CTL=<file>: more trace control lines from the start (kit/runtime/cpu.cpp, RECOMP_TRACE_CONTROL), e.g. CALLS and STACK.
+[ -n "$BENCH_CTL" ] && cat "$BENCH_CTL" >> "$out/bench.ctl"
 
 profile=$(.venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode'))")
 cp "$player/active-mods.json" "$profile/active-mods.json"
