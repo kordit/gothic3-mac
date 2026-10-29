@@ -177,9 +177,23 @@ static std::vector<uint32_t> dropped_textures;
 extern "C" void host_d9_texture_define(const HostD9TextureDesc *d) {
     defined_textures[d->id] = *d;
 }
+// The 2D uploads, while `record_2d_uploads` is set (test_managed_levels_gpu_only).
+struct Upload2D {
+    uint32_t id, level, pitch;
+    std::vector<uint8_t> first; // the first 16 bytes
+};
+static bool record_2d_uploads = false;
+static std::vector<Upload2D> uploads_2d;
+// What host_d9_texture_reads_back answers; 0, the weak default's answer, except inside test_managed_levels_gpu_only.
+static int reads_back_answer = 0;
+extern "C" int host_d9_texture_reads_back(uint32_t) {
+    return reads_back_answer;
+}
 extern "C" void host_d9_texture_upload(uint32_t id, uint32_t slice, uint32_t level,
                                        const uint8_t *bytes, uint32_t pitch) {
     const auto it = defined_textures.find(id);
+    if (record_2d_uploads && it != defined_textures.end() && it->second.kind == HOST_D9_TEX_2D)
+        uploads_2d.push_back({id, level, pitch, {bytes, bytes + 16}});
     if (it == defined_textures.end() || it->second.kind != HOST_D9_TEX_VOLUME)
         return;
     const uint32_t h = std::max(it->second.height >> level, 1u);
@@ -2951,6 +2965,55 @@ static void test_fullscreen_mode() {
     call_method(api, 2);
 }
 
+// A managed texture that is only sampled keeps its levels on the GPU alone: its levels have the size of their bytes
+// and no host copy from creation on (A8R8G8B8 8x8 and DXT1 8x8, three levels). A lock hands out a buffer of that
+// size. A renderer that reads back (reads_back 1) gets the level uploaded at the unlock and keeps it alone, and a second
+// lock reads the level back from it; one that does not (0) gives every level its host copy at the first unlock,
+// holding what was written (uploaded at the first draw).
+static void test_managed_levels_gpu_only(uint32_t dev) {
+    record_2d_uploads = true;
+    const uint32_t formats[2] = {21, 0x31545844u}, level_bytes[2][3] = {{256, 64, 16}, {32, 8, 8}};
+    for (int f = 0; f < 2; ++f)
+        for (int answer = 1; answer >= 0; --answer) {
+            reads_back_answer = answer;
+            uploads_2d.clear();
+            const int reads_before = rb_sync_reads;
+            CHECK(call_method(dev, 23, {8, 8, 3, 0, formats[f], 1, sc(0x600), 0}) == 0);
+            const uint32_t tex = rd32(sc(0x600));
+            ComObj *t = com_this(tex);
+            CHECK(t && t->surfaces.size() == 3);
+            if (!t || t->surfaces.size() != 3)
+                continue;
+            for (int l = 0; l < 3; ++l) {
+                ComObj *s = com_get(t->surfaces[l]);
+                CHECK(s && s->gpu_only && s->blob.empty() && s->pixels_bytes == level_bytes[f][l]);
+            }
+            CHECK(call_method(tex, 19, {0, sc(0x660), 0, 0}) == 0); // LockRect(0)
+            const uint32_t bits = rd32(sc(0x664));
+            for (uint32_t i = 0; i < level_bytes[f][0]; ++i)
+                gm_ptr(bits)[i] = uint8_t(i * 7 + 1);
+            CHECK(call_method(tex, 20, {0}) == 0); // UnlockRect(0)
+            ComObj *l0 = com_get(t->surfaces[0]), *l1 = com_get(t->surfaces[1]);
+            if (answer) {
+                CHECK(uploads_2d.size() == 1 && uploads_2d[0].level == 0 && uploads_2d[0].first[0] == 1 &&
+                      uploads_2d[0].first[15] == uint8_t(15 * 7 + 1));
+                CHECK(l0->gpu_only && l0->blob.empty() && l1->gpu_only && l1->blob.empty());
+                CHECK(call_method(tex, 19, {0, sc(0x660), 0, 0}) == 0); // read back from the GPU's copy
+                CHECK(rb_sync_reads == reads_before + 1);
+                CHECK(call_method(tex, 20, {0}) == 0);
+            } else {
+                CHECK(!l0->gpu_only && l0->blob.size() == level_bytes[f][0] && l0->blob[0] == 1 &&
+                      l0->blob[level_bytes[f][0] - 1] == uint8_t((level_bytes[f][0] - 1) * 7 + 1));
+                CHECK(!l1->gpu_only && l1->blob.size() == level_bytes[f][1] && l1->blob[0] == 0);
+                CHECK(rb_sync_reads == reads_before);
+            }
+            call_method(tex, 2);
+        }
+    reads_back_answer = 0;
+    record_2d_uploads = false;
+    uploads_2d.clear();
+}
+
 // StretchRect into a level of a texture that is not a render target (a DXT texture can be nothing
 // else) is D3DERR_INVALIDCALL, as Direct3D 9 says: D3DXLoadSurfaceFromSurface tries the device first
 // and copies on the CPU after the refusal. Gothic 3 loads textures that way; drawing the copy into a
@@ -3266,6 +3329,7 @@ int main(int argc, char **argv) {
     test_state_block_same_value(dev);
     test_stream_source(dev);
     test_stretch_rect_into_texture(dev);
+    test_managed_levels_gpu_only(dev);
     test_buffer_unlock(dev);
     test_draw_target_refs(dev);
     test_query_nosync(dev);

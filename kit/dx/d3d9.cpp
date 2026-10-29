@@ -1275,10 +1275,12 @@ void Dev_Present(X86 *c) {
 // heap is the game's, and a texture set would exhaust it. The guest sees the
 // bytes only while the resource is locked, through a copy made on the first
 // lock and written back on the last unlock.
-static uint32_t resource_alloc(ComObj *o, uint32_t bytes) {
+// `host_copy` false: the size only, for a level whose bytes live on the GPU alone (ComObj::gpu_only).
+static uint32_t resource_alloc(ComObj *o, uint32_t bytes, bool host_copy = true) {
     if (!bytes)
         return 0;
-    o->blob.assign(bytes, 0);
+    if (host_copy)
+        o->blob.assign(bytes, 0);
     o->pixels = 0;
     o->pixels_bytes = bytes;
     return 1;
@@ -1478,7 +1480,7 @@ static uint32_t dxt_block_bytes(uint32_t fmt) {
     }
 }
 
-static ComObj *make_surface(ComObj *dev, uint32_t w, uint32_t h, uint32_t fmt) {
+static ComObj *make_surface(ComObj *dev, uint32_t w, uint32_t h, uint32_t fmt, bool host_copy = true) {
     ComObj *s = com_new(K_D3D9SURFACE);
     if (!s)
         return nullptr;
@@ -1491,12 +1493,13 @@ static ComObj *make_surface(ComObj *dev, uint32_t w, uint32_t h, uint32_t fmt) {
         uint32_t bw = (s->width + 3) / 4, bh = (s->height + 3) / 4;
         s->bpp = 0;
         s->pitch = bw * block;
-        resource_alloc(s, s->pitch * bh);
+        resource_alloc(s, s->pitch * bh, host_copy);
     } else {
         s->bpp = format_bytes(fmt) * 8;
         s->pitch = s->width * format_bytes(fmt);
-        resource_alloc(s, s->pitch * s->height);
+        resource_alloc(s, s->pitch * s->height, host_copy);
     }
+    s->gpu_only = !host_copy;
     return s;
 }
 
@@ -2129,22 +2132,18 @@ void Dev_CreateTexture(X86 *c) {
                  arg(c, 6), w, h, levels, format_bytes(fmt));
     }
     resource_usage()[tex->id] = usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL);
+    // A managed texture that is only sampled (Gothic 3's images, eCGfxImageData::Read 102f2f40) keeps its levels on
+    // the GPU alone: the shim's copy of every level was a second full copy in host memory. Its levels get no host
+    // copy from the start (player's game 29.10: a zeroed copy made and dropped here was 141 samples of DoLoad).
+    const bool gpu_only = arg(c, 6) == 1 && !(usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL | 0x200u)) && gpu_on();
     for (uint32_t l = 0; l < levels && l < 16; ++l) {
-        ComObj *s = make_surface(dev, std::max(w >> l, 1u), std::max(h >> l, 1u), fmt);
+        ComObj *s = make_surface(dev, std::max(w >> l, 1u), std::max(h >> l, 1u), fmt, !gpu_only);
         if (!s)
             break;
         s->front_obj = tex->id;
         tex->surfaces.push_back(s->id);
     }
     tex->back_obj = tex->surfaces.empty() ? 0 : tex->surfaces[0];
-    // A managed texture that is only sampled (Gothic 3's images, eCGfxImageData::Read 102f2f40) keeps its levels on
-    // the GPU alone: the shim's copy of every level was a second full copy in host memory.
-    if (arg(c, 6) == 1 && !(usage & (USAGE_RENDERTARGET | USAGE_DEPTHSTENCIL | 0x200u)) && gpu_on())
-        for (uint32_t id : tex->surfaces)
-            if (ComObj *s = com_get(id)) {
-                s->gpu_only = true;
-                std::vector<uint8_t>().swap(s->blob);
-            }
     uint32_t view_ = com_view(tex, IF_D3DTEXTURE9);
     if (!view_) {
         com_release(tex);
