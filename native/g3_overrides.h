@@ -278,4 +278,9 @@ void g3n_10357ba0(X86 *c);
 #define FN_113bf8d0 g3n_113bf8d0 /* fmodex FMOD::System::createSound */
 void g3n_113bf8d0(X86 *c);
 
+/* navzone (navzone.c): every NPC's zone test each frame, the whole gCNavZone_PS::Test3DPointInZone at its boundary
+ * (D-043 point 2) */
+#define FN_10a27180 g3n_10a27180 /* Game gCNavZone_PS::Test3DPointInZone */
+void g3n_10a27180(X86 *c);
+
 #endif
