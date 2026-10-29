@@ -261,4 +261,11 @@ void g3n_1053f420(X86 *c);
 #define FN_10548ad0 g3n_10548ad0 /* Engine FUN_10548ad0 (a triangle's corners into its group) */
 void g3n_10548ad0(X86 *c);
 
+/* ao (ao.c): a SpeedTree's ambient occlusion at its load, the emitter walks in C (D-043 point 2, decision of
+ * 29.10.2026, D-051, docs/perf/ao-drzew.md) */
+#define FN_1035a0b0 g3n_1035a0b0 /* Engine eCAOTreeNode::ComputeSphereOcclusionFactor */
+void g3n_1035a0b0(X86 *c);
+#define FN_10359e90 g3n_10359e90 /* Engine eCAOTreeNode::ComputeOcclusionFactor */
+void g3n_10359e90(X86 *c);
+
 #endif
