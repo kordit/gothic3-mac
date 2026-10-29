@@ -13,6 +13,7 @@
 #include "../../runtime/imports.h"
 #include "../../runtime/loader.h"
 #include "../../runtime/memory.h"
+#include "../../runtime/native_seam.h"
 #include "../../runtime/win32.h"
 
 #include <stdio.h>
@@ -377,4 +378,37 @@ MOD_TEST_SUITE(overlay_layer_refuses_program_files) {
     MOD_CHECK(!mods_overlay_layer_name_refused("GLOBAL/attributes.bin"));
     MOD_CHECK(!mods_overlay_layer_name_refused("a.exe.txt"));
     MOD_CHECK(!mods_overlay_layer_name_refused("exe"));
+}
+
+// A read's answer is remembered until the kit sees a change: the guest's own create and delete, a write's copy-up, and
+// a native override's recomp_files_changed each make the next read walk again. A file put in place by anyone else is
+// seen only after such a change; that is how the remembered answer shows it is in use.
+MOD_TEST_SUITE(overlay_reads_remembered_until_a_change) {
+    layers();
+    X86 *c = loader_context();
+    loader_init_context(c);
+    const std::string profile = mods_overlay_profile_dir();
+    MOD_CHECK(win32_host_path_op("data\\later.txt", WIN32_FILE_READ).empty());
+    write_file(profile + "/data/later.txt", "outside");
+    MOD_CHECK(win32_host_path_op("data\\later.txt", WIN32_FILE_READ).empty()); // remembered: not there
+    recomp_files_changed();
+    MOD_CHECK(read_file(win32_host_path_op("data\\later.txt", WIN32_FILE_READ)) == "outside");
+
+    // The guest's create: CREATE_NEW of a path a read just found missing.
+    MOD_CHECK(win32_host_path_op("data\\guest.txt", WIN32_FILE_READ).empty());
+    uint32_t name = mod_test_put_str("data\\guest.txt");
+    uint32_t h = mod_test_call_import(c, "KERNEL32.dll", "CreateFileA", {name, 0x40000000u, 0, 0, 1, 0, 0});
+    MOD_CHECK(h != 0xffffffffu);
+    mod_test_call_import(c, "KERNEL32.dll", "CloseHandle", {h});
+    MOD_CHECK(win32_host_path_op("data\\guest.txt", WIN32_FILE_READ).find(profile) == 0);
+
+    // A read that found the mod's copy, then a write resolution copying it up: the read finds the profile's after.
+    MOD_CHECK(win32_host_path_op("data\\froma.txt", WIN32_FILE_READ).find(std::string(ROOT) + "/moda") == 0);
+    MOD_CHECK(win32_host_path_op("data\\froma.txt", WIN32_FILE_WRITE).find(profile) == 0);
+    MOD_CHECK(win32_host_path_op("data\\froma.txt", WIN32_FILE_READ).find(profile) == 0);
+
+    // The guest's delete reveals the tier below again.
+    uint32_t del = mod_test_put_str("DATA\\FROMA.TXT");
+    MOD_CHECK_EQ(mod_test_call_import(c, "KERNEL32.dll", "DeleteFileA", {del}), 1u);
+    MOD_CHECK(win32_host_path_op("data\\froma.txt", WIN32_FILE_READ).find(std::string(ROOT) + "/moda") == 0);
 }

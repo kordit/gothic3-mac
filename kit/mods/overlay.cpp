@@ -11,10 +11,12 @@
 #include <cstdlib>
 #include <filesystem>
 #include <limits>
+#include <mutex>
 #include <new>
 #include <stdio.h>
 #include <string.h>
 #include <thread>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace {
@@ -323,27 +325,74 @@ uint32_t mods_overlay_layer_count() {
     return (uint32_t)layers().size();
 }
 
+namespace {
+// What a read or a listing resolved to, by the relative path as asked ("" for nothing found). The walk lists every
+// directory on the way in every tier, and a game may ask about a path on every open: Gothic 3's FileSystem looks for a
+// loose file before each archive entry, and in the player's game (29.10) this walk was 732 samples under the frame's
+// texture loads, opendir and getdirentries most of them. Everything is dropped when win32_dir_generation moves, which
+// every create, delete, rename, directory and tier change through the kit does, and a native override's own through
+// recomp_files_changed; a file changed by another program is seen after the next such change.
+struct ReadCache {
+    std::mutex m;
+    uint64_t generation = 0;
+    std::unordered_map<std::string, std::string> found;
+};
+ReadCache &read_cache() {
+    static ReadCache c;
+    return c;
+}
+constexpr size_t READ_CACHE_MAX = 1u << 18; // a game's every file, about; past that it starts over
+} // namespace
+
 bool mods_cpp_overlay_resolve(const std::string &rel, int op, std::string *out) {
     if (!out)
         return false;
     out->clear();
-    const auto roots = roots_snapshot();
     if (op == WIN32_FILE_READ || op == WIN32_FILE_LIST) {
+        ReadCache &rc = read_cache();
+        const uint64_t generation = win32_dir_generation();
+        {
+            std::lock_guard<std::mutex> g(rc.m);
+            if (rc.generation != generation) {
+                rc.found.clear();
+                rc.generation = generation;
+            }
+            auto it = rc.found.find(rel);
+            if (it != rc.found.end()) {
+                *out = it->second;
+                return !out->empty();
+            }
+        }
+        const auto roots = roots_snapshot();
         const bool refused = mods_overlay_layer_name_refused(rel);
-        for (size_t i = 0; i < roots.size(); ++i) {
+        bool hit = false;
+        for (size_t i = 0; i < roots.size() && !hit; ++i) {
             if (refused && i > 0 && i + 1 < roots.size())   // a layer root (run 29)
                 continue;
-            if (resolve_in(roots[i], rel, false, false, out))
-                return true;
+            hit = resolve_in(roots[i], rel, false, false, out);
         }
-        return false;
+        if (!hit)
+            out->clear();
+        // Kept only if nothing changed during the walk.
+        std::lock_guard<std::mutex> g(rc.m);
+        if (rc.generation == generation && win32_dir_generation() == generation) {
+            if (rc.found.size() >= READ_CACHE_MAX)
+                rc.found.clear();
+            rc.found.emplace(rel, *out);
+        }
+        return hit;
     }
+    const auto roots = roots_snapshot();
     if (rel.empty())
         return false; // The profile root itself is not an asset.
     if (op == WIN32_FILE_DELETE || op == WIN32_FILE_RENAME_SRC)
         return resolve_in(roots[0], rel, false, true, out);
     if (op != WIN32_FILE_WRITE && op != WIN32_FILE_RENAME_DST)
         return false;
+    // The walk may make the profile's directories and copy a lower file up: what reads remembered may be wrong after.
+    struct Changed {
+        ~Changed() { win32_invalidate_dir_cache(); }
+    } changed;
     std::string target;
     if (!resolve_in(roots[0], rel, true, true, &target))
         return false;

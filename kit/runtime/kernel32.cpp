@@ -313,9 +313,20 @@ std::map<std::string, std::vector<std::pair<std::string, std::string>>> &overlay
 
 } // namespace
 
+static std::atomic<uint64_t> g_dir_generation{1};
+
 void win32_invalidate_dir_cache() {
     dir_cache().clear();
     overlay_list_cache().clear();
+    g_dir_generation.fetch_add(1, std::memory_order_release);
+}
+
+uint64_t win32_dir_generation() {
+    return g_dir_generation.load(std::memory_order_acquire);
+}
+
+extern "C" void recomp_files_changed(void) {
+    win32_invalidate_dir_cache();
 }
 
 const std::string &win32_game_dir() {

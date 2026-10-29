@@ -132,6 +132,8 @@ std::string win32_guest_path(const std::string &host_path);
 // or closed handles and failed position queries; outputs are then unchanged.
 bool win32_file_handle_position(uint32_t handle, std::string *host_path, int64_t *offset);
 void win32_invalidate_dir_cache();
+// Moves at every win32_invalidate_dir_cache: what a resolver remembered under one value stands while it is unchanged.
+uint64_t win32_dir_generation();
 
 // The lister reports one (name, host_path) pair per file, already merged and
 // de-duplicated across tiers, so FindFirstFileA can fill metadata from the

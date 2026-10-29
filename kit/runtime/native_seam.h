@@ -24,6 +24,12 @@ int recomp_writable_path(const char *guest_path, char *out, size_t out_len);
  * then the game directory. Zero when the path cannot be resolved. */
 int recomp_readable_path(const char *guest_path, char *out, size_t out_len);
 
+/* A native override that created, renamed or deleted a file itself, not
+ * through the guest's Win32, says so here: the host forgets what it
+ * remembered about paths, as after the guest's own changes. Requires the
+ * guest scheduler baton. */
+void recomp_files_changed(void);
+
 /* Offer a DirectDraw display mode, as the host does for its own modes. */
 int ddraw_add_mode(int w, int h, int bpp);
 
