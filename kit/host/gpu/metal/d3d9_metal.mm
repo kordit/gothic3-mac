@@ -7707,9 +7707,9 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     // size, format and samples, whether it has depth), passes and draws a frame, every 10 s. Each command buffer
     // takes a sample buffer of 256 passes from a pool and gives it back when it has finished.
     struct GpuPassKey {
-        uint32_t w, h, fmt, samples, depth;
+        uint32_t w, h, fmt, samples, depth, vis;
         bool operator<(const GpuPassKey &o) const {
-            return std::tie(w, h, fmt, samples, depth) < std::tie(o.w, o.h, o.fmt, o.samples, o.depth);
+            return std::tie(w, h, fmt, samples, depth, vis) < std::tie(o.w, o.h, o.fmt, o.samples, o.depth, o.vis);
         }
     };
     struct GpuPassAcc {
@@ -7846,6 +7846,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         }
         key.samples = pass_samples_;
         key.depth = rp.depthAttachment.texture != nil;
+        key.vis = rp.visibilityResultBuffer != nil;
         gp_cur_->passes.emplace_back(key, 0);
         gp_cur_->prims.push_back(0);
         gp_pass_draws_ = draws_;
@@ -7917,9 +7918,9 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             if (!fn)
                 snprintf(fb, sizeof fb, "fmt%u", k.fmt), fn = fb;
             fprintf(stderr,
-                    "d3d9 metal: gpu pass %ux%u %s x%u%s: %.2f ms per frame (vertex %.2f, fragment %.2f), "
+                    "d3d9 metal: gpu pass %ux%u %s x%u%s%s: %.2f ms per frame (vertex %.2f, fragment %.2f), "
                     "%.1f passes, %.0f draws, %.0fk primitives per frame\n",
-                    k.w, k.h, fn, k.samples, k.depth ? " +depth" : "", busy(a) / 1e6 / frames,
+                    k.w, k.h, fn, k.samples, k.depth ? " +depth" : "", k.vis ? " +visibility" : "", busy(a) / 1e6 / frames,
                     a.vertex_ns / 1e6 / frames, a.fragment_ns / 1e6 / frames, (double)a.passes / frames,
                     (double)a.draws / frames, a.prims / 1e3 / frames);
         }
