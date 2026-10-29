@@ -1668,9 +1668,10 @@ class Renderer final : public D9Backend {
         // above already waited for any draw of the old contents. A read of the texture waits for the blit.
         const uint32_t rows = t.info.block ? (h + 3) / 4 : h;
         if ((t.info.block || t.info.conv == Conv::Direct) && (size_t)pitch * rows >= kBlitUploadBytes) {
-            auto staging = [mtl_ newBufferWithBytes:bytes
-                                                      length:(NSUInteger)pitch * rows
-                                                     options:MTLResourceStorageModeShared];
+            size_t slot = SIZE_MAX;
+            auto staging = staging_for((size_t)pitch * rows, &slot);
+            if (staging)
+                memcpy(staging.contents, bytes, (size_t)pitch * rows);
             auto ub = staging ? [queue_ commandBuffer] : nil; // `id` is the texture's parameter here
             auto blit = [ub blitCommandEncoder];
             if (blit) {
@@ -1686,6 +1687,8 @@ class Renderer final : public D9Backend {
                 [blit endEncoding];
                 [ub commit];
                 t.upload_cmd = ub;
+                if (slot != SIZE_MAX)
+                    staging_[slot].cmd = ub;
                 return;
             }
         }
@@ -1712,6 +1715,35 @@ class Renderer final : public D9Backend {
                          bytesPerRow:w * 4
                        bytesPerImage:0];
         }
+    }
+
+    // A staging buffer for a blit upload of n bytes: the smallest kept one whose last blit has completed, else a new
+    // one, kept while the kept ones stay under kStagingKeep. A new shared buffer per upload paid the first touch of its
+    // pages in the copy (Gothic 3 session 28: 65 ms of a walk's texture loads in newBufferWithBytes; 8 MB new 0.67 ms,
+    // into a kept one 0.19 ms). *slot is the kept one's index, SIZE_MAX for one not kept.
+    id<MTLBuffer> staging_for(size_t n, size_t *slot) {
+        size_t best = SIZE_MAX;
+        for (size_t i = 0; i < staging_.size(); ++i) {
+            const Staging &st = staging_[i];
+            if (st.buf.length < n || (st.cmd && st.cmd.status < MTLCommandBufferStatusCompleted))
+                continue;
+            if (best == SIZE_MAX || st.buf.length < staging_[best].buf.length)
+                best = i;
+        }
+        if (best != SIZE_MAX) {
+            staging_[best].cmd = nil;
+            *slot = best;
+            return staging_[best].buf;
+        }
+        const size_t len = (n + kStagingRound - 1) / kStagingRound * kStagingRound;
+        id<MTLBuffer> b = [mtl_ newBufferWithLength:len options:MTLResourceStorageModeShared];
+        *slot = SIZE_MAX;
+        if (b && staging_bytes_ + len <= kStagingKeep) {
+            staging_.push_back({b, nil});
+            staging_bytes_ += len;
+            *slot = staging_.size() - 1;
+        }
+        return b;
     }
 
     bool reads_back(uint32_t id) override {
@@ -8994,6 +9026,13 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     NSUInteger transient_used_ = 0;
     id<MTLTexture> white_ = nil, white_cube_ = nil, white_depth_ = nil, white_volume_ = nil;
     std::vector<uint8_t> scratch_;
+    struct Staging {
+        id<MTLBuffer> buf = nil;
+        id<MTLCommandBuffer> cmd = nil; // the last blit that reads it
+    };
+    std::vector<Staging> staging_; // upload's kept staging buffers (staging_for)
+    size_t staging_bytes_ = 0;
+    static constexpr size_t kStagingKeep = 64u << 20, kStagingRound = 1u << 20;
     std::vector<float> constants_;
     id<MTLTexture> fmt_tex_[4] = {nil, nil, nil, nil}, fmt_depth_ = nil;   // run 29: draw()'s attachment format cache
     MTLPixelFormat fmt_cf_[4] = {MTLPixelFormatInvalid, MTLPixelFormatInvalid, MTLPixelFormatInvalid,
