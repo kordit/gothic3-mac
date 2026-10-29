@@ -3861,6 +3861,25 @@ class Renderer final : public D9Backend {
         if (queries_[id].probed)
             fprintf(stderr, "probe query %u end after draw %llu%s\n", id, (unsigned long long)draws_,
                     queries_[id].overflow ? " (overflow: counts as 1)" : "");
+        send_ahead();
+    }
+    // A D3D9 driver hands its commands to the GPU as they come; this renderer commits once a frame, at Present, or
+    // when a game waits for a query with FLUSH (query_result). Gothic 3's occlusion culling waits on queries of the
+    // frame it is drawing (Engine 103feb5b), so the GPU stood idle while the frame was traversed and the game then
+    // waited for all of it at once (session 28, a cave without a window: 47% of the game thread in ResolveOCQuery).
+    // So at a query's end, when the GPU has run everything committed so far and the open command buffer holds at
+    // least kSendAheadDraws draws, it is committed now: the GPU counts while the game goes on. Only when the GPU is
+    // idle, so the extra render pass splits fall where the GPU would have waited anyway, and the frame semaphore is
+    // free (every committed buffer has completed). RECOMP_D3D9_SEND_AHEAD=0 turns it off.
+    void send_ahead() {
+        static const bool on = [] {
+            const char *e = recomp_env("D3D9_SEND_AHEAD");
+            return !e || strtoul(e, nullptr, 10) != 0;
+        }();
+        if (!on || !cmd_ || draws_ - cmd_draws_ < kSendAheadDraws || completed_.load() < committed_)
+            return;
+        flush();
+        ++send_aheads_;
     }
     int query_result(uint32_t id, uint32_t *count, bool send) override {
         auto it = queries_.find(id);
@@ -4915,6 +4934,11 @@ class Renderer final : public D9Backend {
             device_->commit(cb);
         }
         ++presents_;
+        if (presents_ % 600 == 0 && send_aheads_) {
+            fprintf(stderr, "[d3d9 metal] send ahead: %llu commits in the last 600 frames\n",
+                    (unsigned long long)send_aheads_);
+            send_aheads_ = 0;
+        }
         g_host_game_gpu_frames.fetch_add(1, std::memory_order_relaxed);
         capture_scope_frame();   // run 20: one capture scope per game frame (MTL_CAPTURE_ENABLED=1 only)
         hdr_latch(backbuffer);   // PLAN_R2 item 10: the next frame's format
@@ -8050,6 +8074,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         }
         cmd_ = [queue_ commandBuffer];
         ++serial_;
+        cmd_draws_ = draws_;
         if (gpu_labels_)   // run 20 TEST
             cmd_.label = [NSString stringWithFormat:@"NFSMW frame %llu serial %llu", (unsigned long long)(presents_ + 1), (unsigned long long)serial_];
         dispatch_semaphore_t sem = frames_;
@@ -8079,6 +8104,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             vis_ = nil;
         }
         [cmd_ commit];
+        committed_ = serial_;
         if (trace_) {
             submitted_ = serial_;
             trace_->event("submit", trace_context());
@@ -8936,6 +8962,9 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     dispatch_semaphore_t frames_;
     id<MTLCommandBuffer> cmd_ = nil, last_ = nil;
     uint64_t serial_ = 0;
+    uint64_t committed_ = 0, cmd_draws_ = 0, send_aheads_ = 0; // send_ahead: the last committed serial, draws_ at
+                                                               // the open buffer's start, commits so far
+    static constexpr uint64_t kSendAheadDraws = 64;
     uint64_t submitted_ = 0, pass_serial_ = 0;
     uint32_t resource_generation_ = 0, trace_flushes_ = 0;
     uint64_t trace_bytes_ = 0, burst_trace_start_ = 0, burst_pixel_bytes_ = 0, burst_start_ = 0;
