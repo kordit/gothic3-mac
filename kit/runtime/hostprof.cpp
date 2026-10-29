@@ -23,6 +23,8 @@
 // Every second tick it samples the other guest threads too, and a slow frame writes each one's stacks to
 // <prefix>-thr-<n>-<ms>-<guest thread id>-<start routine>.txt: what the thread holding the baton did while the game
 // thread waited for it, and what a free thread (fmodex's mixer) did while it fell behind (Gothic 3 session 21).
+// Every 10 s of play all the game thread's stacks, slow frames or not, go to <prefix>-win-<n>-<ms per frame>ms-
+// <frames over 33 ms>.txt: a place where every frame takes 28 ms has no spike at all (Gothic 3 session 28, a cave).
 #include "hostprof.h"
 
 #include "../platform/os.h"
@@ -61,6 +63,11 @@ struct Spike {
     std::map<Stack, uint64_t> frame;
     std::map<uint64_t, Other> others; // by host thread
 };
+struct Window {
+    double ms;
+    unsigned over33;
+    std::map<Stack, uint64_t> counts;
+};
 struct State {
     std::mutex mutex;
     std::map<Stack, uint64_t> counts;
@@ -71,6 +78,12 @@ struct State {
     std::map<uint64_t, Other> others;
     std::vector<Spike> pending;
     unsigned spikes = 0;
+    // spike mode: every frame's stacks over the current 10 s, windows waiting to be written
+    std::map<Stack, uint64_t> window;
+    std::chrono::steady_clock::time_point window_start{};
+    double window_ms = 0;
+    unsigned window_frames = 0, window_over33 = 0, windows = 0;
+    std::vector<Window> pending_windows;
     std::atomic<uint64_t> spike_bytes{0};
 };
 const unsigned SPIKE_FILES = 2000;
@@ -125,9 +138,20 @@ bool sample(pthread_t thread, Stack &out) {
 void write_spikes() {
     auto &s = state();
     std::vector<Spike> todo;
+    std::vector<Window> windows;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         todo.swap(s.pending);
+        windows.swap(s.pending_windows);
+    }
+    for (const auto &w : windows) {
+        char path[1024];
+        snprintf(path, sizeof path, "%s-win-%u-%.1fms-%u.txt", prefix(), s.windows++, w.ms, w.over33);
+        if (FILE *f = fopen(path, "w")) {
+            write_stacks(f, w.counts);
+            s.spike_bytes += (uint64_t)ftell(f);
+            fclose(f);
+        }
     }
     for (const auto &spike : todo) {
         const unsigned n = s.spikes++;
@@ -294,6 +318,21 @@ void hostprof_frame(double frame_ms) {
     auto &s = state();
     s.game_thread.store((uint64_t)(uintptr_t)pthread_self(), std::memory_order_release);
     std::lock_guard<std::mutex> lock(s.mutex);
+    for (const auto &kv : s.frame)
+        s.window[kv.first] += kv.second;
+    s.window_ms += frame_ms;
+    ++s.window_frames;
+    s.window_over33 += frame_ms > 33.0;
+    const auto now = std::chrono::steady_clock::now();
+    if (s.window_frames == 1)
+        s.window_start = now;
+    else if (now - s.window_start >= std::chrono::seconds(10)) {
+        if (s.spike_bytes < SPIKE_BYTES)
+            s.pending_windows.push_back({s.window_ms / s.window_frames, s.window_over33, std::move(s.window)});
+        s.window.clear();
+        s.window_ms = 0;
+        s.window_frames = s.window_over33 = 0;
+    }
     if (frame_ms >= spike_ms() && s.spikes + s.pending.size() < SPIKE_FILES && s.spike_bytes < SPIKE_BYTES)
         s.pending.push_back({frame_ms, std::move(s.frame), std::move(s.others)});
     s.frame.clear();
