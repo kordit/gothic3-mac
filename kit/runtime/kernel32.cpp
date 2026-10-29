@@ -225,8 +225,9 @@ const uint32_t MAXIMUM_WAIT_OBJECTS_ = 64;
 struct GuestThread;
 GuestThread *cur_thread();
 bool guest_yield();
-// kit/dx/d3d9.cpp; weak, so a runtime without the D3D9 layer (runtime_tests) links and skips it.
-extern "C" __attribute__((weak)) void recomp_phase_add(const char *name, uint64_t ns);
+// kit/dx/d3d9.cpp's adds the frame phase; this weak default, for a runtime without the D3D9 layer (host_tests), drops it.
+// A weak declaration alone does not link on Mach-O.
+extern "C" __attribute__((weak)) void recomp_phase_add(const char *, uint64_t) {}
 uint32_t cur_tls_base();
 uint32_t cur_thread_id();
 // Blocking primitives, implemented on the scheduler further down. Every one of
@@ -2147,9 +2148,9 @@ uint32_t g_free_cs_waiters = 0; // free threads parked on g_sched_cv for a criti
 // Threads waiting for any critical section: a batoned one from sched_enter_critsec until the scheduler grants it, a
 // free one while it is parked. A leave that finds nobody counted takes no lock (critsec_try_take).
 std::atomic<uint32_t> g_cs_waiting{0};
-// Read by the host from the very thread that sets it, so a plain bool is the
-// whole of it: no other thread looks.
-bool g_in_idle_slice = false;
+// Set by the run thread (under g_sched_m, before it lets go of it) for the length of a host slice. The host reads it on
+// that thread; the deadline ticker and sched_wake_idle_host read it from others, to end the slice early.
+std::atomic<bool> g_in_idle_slice{false};
 bool (*g_input_pending)() = nullptr;
 void (*g_input_drain)() = nullptr;
 bool g_exit_requested = false; // a guest thread called ExitProcess
@@ -2458,6 +2459,15 @@ void thread_finish_exit_process();
 // the timed waits stay as the backstop, so a missed tick is never worse than
 // before. RECOMP_SCHED_TICKER=0 disables it (A/B evidence only).
 void (*g_idle_wake)() = nullptr;
+// Another guest thread has just become runnable: a free thread asks for the baton, a section a thread waits on is
+// free. g_sched_cv does not reach the run thread while it sleeps in the host's event wait (sched_wait_locked), so
+// without this the run thread saw it only at the end of its slice, up to HOST_IDLE_MAX_SLICE later. Gothic 3:
+// FMOD Ex's stream thread reads its files through Engine's callbacks and asked for the baton while the game thread
+// slept in AppKit, frames of 50-93 ms (docs/perf/fmodex-baton.md).
+void sched_wake_idle_host() {
+    if (g_idle_wake && g_in_idle_slice.load(std::memory_order_seq_cst))
+        g_idle_wake();
+}
 struct DeadlineTicker {
     std::mutex m;
     std::condition_variable cv;
@@ -2535,12 +2545,14 @@ void sched_wait_locked(size_t me, double until, double max_slice) {
         if (until && until - now < slice)
             slice = until - now;
         int (*waiter)(double) = g_idle_waiter;
-        g_sched_m.unlock();
-        // The lock is down and another guest thread may take the baton and run
+        // Once the lock is down another guest thread may take the baton and run
         // guest code for the whole slice. Say so, so the host can hold back
         // anything the guest would see - input delivery, and mod callbacks
-        // above all - until it holds the baton itself.
+        // above all - until it holds the baton itself. Said before the lock goes,
+        // so a thread that becomes runnable after this wait was decided on sees
+        // it and ends the slice (sched_wake_idle_host).
         g_in_idle_slice = true;
+        g_sched_m.unlock();
         // AppKit's event wait cannot hear g_sched_cv. Sleeping there for each
         // handoff makes short mouse/keyboard workers cost a full 2 ms slice,
         // many times per rendered frame while the pointer moves. Poll events
@@ -3226,7 +3238,7 @@ uint32_t guest_block(const char *why) {
         main_starve_max(late);
     }
     g_sched_m.unlock();
-    if (wait_phase && recomp_phase_add)
+    if (wait_phase)
         recomp_phase_add(wait_phase, wait_ns);
     t_run_cpu_from = os_thread_cpu_ns();
     if (g_exit_requested)
@@ -3271,7 +3283,7 @@ bool guest_yield() {
         }
     }
     g_sched_m.unlock();
-    if (yield_ns && recomp_phase_add)
+    if (yield_ns)
         recomp_phase_add("wait yield", yield_ns);
     if (moved && g_exit_requested)
         thread_finish_exit_process();
@@ -3679,6 +3691,7 @@ void sched_leave_critsec(uint32_t cs) {
             g_sched_m.lock();
             g_sched_cv.notify_all();
             g_sched_m.unlock();
+            sched_wake_idle_host();
         }
         return;
     }
@@ -3710,6 +3723,10 @@ void sched_leave_critsec(uint32_t cs) {
             }
         if (waiter)
             g_sched_cv.notify_all();
+        g_sched_m.unlock();
+        if (waiter)
+            sched_wake_idle_host();
+        return;
     }
     g_sched_m.unlock();
 }
@@ -6158,6 +6175,11 @@ void sched_free_acquire() {
     g_sched_m.lock();
     me->free_wants = true;
     g_sched_cv.notify_all(); // a holder parked in a timed wait looks again
+    if (g_baton != me->index && g_in_idle_slice.load(std::memory_order_seq_cst)) {
+        g_sched_m.unlock(); // and one asleep in the host's event wait; the host's wake takes no scheduler lock
+        sched_wake_idle_host();
+        g_sched_m.lock();
+    }
     while (g_baton != me->index) {
         // A stranded baton goes to whoever asks (sched_run_others_locked does the same).
         if (baton_stranded_locked()) {
