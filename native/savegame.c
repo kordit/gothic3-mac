@@ -22,6 +22,7 @@
 
 void fn_109b9e90(X86 *c); /* gCHUDFileManager: save the session under a name */
 const char *mods_overlay_profile_dir(void);
+void recomp_files_changed(void); /* kit/runtime/native_seam.h: the renames here go past the kit's Win32 */
 
 static int sg_exists(const char *path) {
     struct stat st;
@@ -82,6 +83,7 @@ static void sg_keep_quicksave(void) {
         if (rename(qs, to) != 0) {
             if (sg_exists(tod))
                 rename(tod, qsd); /* put the pair back together */
+            recomp_files_changed();
             fprintf(stderr, "[g3] quicksave: could not keep the previous one (%s)\n", to);
             return;
         }
@@ -90,6 +92,7 @@ static void sg_keep_quicksave(void) {
         snprintf(sg_from[1], sizeof sg_from[1], "%s", qsd);
         snprintf(sg_to[1], sizeof sg_to[1], "%s", tod);
         sg_moved = 1;
+        recomp_files_changed();
         fprintf(stderr, "[g3] quicksave: the previous quick save is now %s_%04d\n", prefix, n);
         return;
     }
@@ -112,6 +115,7 @@ void g3n_109b9e90(X86 *c) {
         for (int i = 0; i < 2; ++i)
             if (sg_exists(sg_to[i]))
                 rename(sg_to[i], sg_from[i]);
+        recomp_files_changed();
         fprintf(stderr, "[g3] quicksave: the save failed, the previous quick save is back\n");
     }
     sg_moved = 0;
