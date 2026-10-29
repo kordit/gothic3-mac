@@ -3794,6 +3794,8 @@ class Renderer final : public D9Backend {
                 textures_[d.target.depth.id].written = serial_;
         }
         ++draws_;
+        if (gp_on_ && encoded == d9trace::Result::Encoded)
+            gp_prims_ += (uint64_t)d.primitive_count * std::max<uint32_t>(d9_instances(d), 1);
         if (probing()) {
             char vs_hash[20], ps_hash[20];
             snprintf(vs_hash, sizeof vs_hash, "%016llx", (unsigned long long)vs_key);
@@ -7711,11 +7713,12 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         }
     };
     struct GpuPassAcc {
-        uint64_t vertex_ns = 0, fragment_ns = 0, passes = 0, draws = 0;
+        uint64_t vertex_ns = 0, fragment_ns = 0, passes = 0, draws = 0, prims = 0;
     };
     struct GpuPassSlot {
         id<MTLCounterSampleBuffer> buf = nil;
         std::vector<std::pair<GpuPassKey, uint64_t>> passes; // the key and the draws of each sampled pass
+        std::vector<uint64_t> prims;                         // its primitives (times instances)
     };
     static constexpr uint32_t kGpuPassMax = 256;
     bool gp_on_ = [] { const char *e = getenv("RECOMP_D3D9_GPU_PASSES"); return e && *e == '1'; }();
@@ -7726,7 +7729,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     std::vector<GpuPassSlot *> gp_free_;
     GpuPassSlot *gp_cur_ = nullptr;   // the open command buffer's
     int gp_pass_ = -1;                // the open pass's index in it, -1 when not sampled
-    uint64_t gp_pass_draws_ = 0;
+    uint64_t gp_pass_draws_ = 0, gp_prims_ = 0, gp_pass_prims_ = 0;
     std::map<GpuPassKey, GpuPassAcc> gp_acc_;
     uint64_t gp_unsampled_ = 0, gp_blits_ = 0;
     // Where the passes end: the source line of each end_pass() that closed an open encoder, with the closed pass's
@@ -7789,6 +7792,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
             gp_cur_->buf = b;
         }
         gp_cur_->passes.clear();
+        gp_cur_->prims.clear();
         GpuPassSlot *slot = gp_cur_;
         [cmd_ addCompletedHandler:^(id<MTLCommandBuffer>) {
           gp_complete(slot);
@@ -7813,6 +7817,7 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
                 a.fragment_ns += span(f0, f1);
                 ++a.passes;
                 a.draws += slot->passes[i].second;
+                a.prims += i < slot->prims.size() ? slot->prims[i] : 0;
             }
         }
         gp_free_.push_back(slot);
@@ -7842,11 +7847,14 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         key.samples = pass_samples_;
         key.depth = rp.depthAttachment.texture != nil;
         gp_cur_->passes.emplace_back(key, 0);
+        gp_cur_->prims.push_back(0);
         gp_pass_draws_ = draws_;
+        gp_pass_prims_ = gp_prims_;
     }
     void gp_end_pass() {
         if (gp_pass_ >= 0 && gp_cur_ && gp_pass_ < (int)gp_cur_->passes.size())
-            gp_cur_->passes[gp_pass_].second = draws_ - gp_pass_draws_;
+            gp_cur_->passes[gp_pass_].second = draws_ - gp_pass_draws_,
+            gp_cur_->prims[gp_pass_] = gp_prims_ - gp_pass_prims_;
         gp_pass_ = -1;
     }
     static const char *gp_format(uint32_t f) {
@@ -7910,10 +7918,10 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
                 snprintf(fb, sizeof fb, "fmt%u", k.fmt), fn = fb;
             fprintf(stderr,
                     "d3d9 metal: gpu pass %ux%u %s x%u%s: %.2f ms per frame (vertex %.2f, fragment %.2f), "
-                    "%.1f passes, %.0f draws per frame\n",
+                    "%.1f passes, %.0f draws, %.0fk primitives per frame\n",
                     k.w, k.h, fn, k.samples, k.depth ? " +depth" : "", busy(a) / 1e6 / frames,
                     a.vertex_ns / 1e6 / frames, a.fragment_ns / 1e6 / frames, (double)a.passes / frames,
-                    (double)a.draws / frames);
+                    (double)a.draws / frames, a.prims / 1e3 / frames);
         }
         std::vector<std::pair<uint64_t, std::tuple<int, uint32_t, uint32_t, uint32_t>>> ev;
         for (auto &e : ends)
