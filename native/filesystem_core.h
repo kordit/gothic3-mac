@@ -14,6 +14,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace g3fs {
@@ -67,8 +68,6 @@ struct Pack {
     std::string path, host_path; // the guest path MountPackFile got, the host file
     int fd = -1;
     uint64_t file_size = 0; // of the archive file, the bound every offset and length is checked against
-    // The whole file mapped read-only by pack_load, null where it did not map: stored entries are read from here.
-    const uint8_t *map = nullptr;
     std::deque<Node> nodes; // nodes[0] is the root
     Node *root() { return &nodes.front(); }
     ~Pack();
@@ -131,39 +130,64 @@ class FileSystem {
     std::vector<std::unique_ptr<Volume>> volumes_;
 };
 
+// Bytes whose resize leaves the new ones as they are, not zeroed: for buffers that are written whole before they are
+// read (an entry read from its archive, 108 of DoLoad's samples zeroed such a buffer in the player's game 29.10).
+template <class T> struct NoInit : std::allocator<T> {
+    template <class U> struct rebind {
+        using other = NoInit<U>;
+    };
+    NoInit() = default;
+    template <class U> NoInit(const NoInit<U> &) {}
+    template <class U> void construct(U *p) { ::new ((void *)p) U; }
+    template <class U, class... A> void construct(U *p, A &&...a) { ::new ((void *)p) U(std::forward<A>(a)...); }
+};
+using Bytes = std::vector<uint8_t, NoInit<uint8_t>>;
+
 // The archive reader and the entry's bytes, for the adapter's file objects and the test.
 bool pack_load(Pack *pack, std::string *error);
 // The whole entry as the original's buffered stream holds it: stored bytes copied, zlib inflated; false on an
 // encrypted entry, a damaged stream or a short read (the original's open fails then).
-bool pack_read_entry(const Pack &pack, const Node &node, std::vector<uint8_t> *out);
-// Where the mapping holds a stored, unencrypted entry's node.size bytes; null for any other entry, an empty one, an
-// archive without a mapping, or numbers outside the file (pack_read_entry then decides).
-const uint8_t *pack_entry_view(const Pack &pack, const Node &node);
+bool pack_read_entry(const Pack &pack, const Node &node, Bytes *out);
+// A stored, unencrypted, non-empty entry whose bytes lie inside the file: one a read can take from the archive as is.
+// False for any other (pack_read_entry then decides).
+bool pack_entry_stored(const Pack &pack, const Node &node);
 // Bytes of the archive file itself from `at` (the direct stream's read); the count read, -1 on an error.
 int64_t pack_pread(const Pack &pack, uint64_t at, void *buf, size_t n);
 
-// A buffered entry's bytes as its open streams share them (the original's memory stream, 10da3a50). A stored entry of
-// a mapped archive is read where the mapping holds it, no copy at the open (player's game 29.10: 770 of 1388 samples
-// of DoLoad copied up to 21 MB a texture there); its first write gives it bytes of its own, as a zlib entry has from
-// the start. Not thread-safe: the adapter holds the entry's lock around every call.
+// A buffered entry's bytes as its open streams share them (the original's memory stream, 10da3a50). The open of a
+// stored entry reads nothing (player's game 29.10: 770 of DoLoad's 1388 samples read up to 21 MB a texture there and
+// copied it again into the reader's buffer). A big read of it goes from the archive file straight into the reader's
+// buffer (direct); a small one has the adapter read the whole entry in once (adopt), as the open did, since the world's
+// objects are read a few bytes a call. A first write reads it in too. A zlib entry has its own bytes from the open.
+// A memory map of the archive in place of the reads was tried and was slower (game 14:53: page faults of 16 KB each,
+// 5119 samples in s_read against 541). Not thread-safe: the adapter holds the entry's lock around every call.
 class EntryBytes {
   public:
-    // A stored entry of a mapped archive: true, nothing read; the archive is kept while the view is in use.
-    bool map(const std::shared_ptr<Pack> &pack, const Node &node);
+    static constexpr size_t DIRECT = 64u << 10; // a read this big, or of the whole entry, goes to the archive
+    // A stored entry (pack_entry_stored): true, nothing read; the archive is kept while the entry refers to it.
+    bool refer(const std::shared_ptr<Pack> &pack, const Node &node);
     // The entry read into its own bytes (pack_read_entry), false where that fails.
     bool load(const Pack &pack, const Node &node);
-    uint64_t size() const { return view_ ? view_size_ : own_.size(); }
-    // The mapped bytes, null once the entry has its own. They never change and stay mapped while the archive is held
-    // (the file object holds it), so a copy from them may run outside the entry's lock.
-    const uint8_t *view() const { return view_; }
-    size_t read(uint64_t at, void *dst, size_t n) const; // up to the end, the count copied
-    void write(uint64_t at, const void *src, size_t n);  // grows the entry as far as it reaches
+    uint64_t size() const { return pack_ ? size_ : own_.size(); }
+    // Whether the entry's bytes are still only in the archive.
+    bool in_archive() const { return pack_ != nullptr; }
+    // In the archive, and a read of n at `at` takes them from there rather than from bytes read in first.
+    bool direct(uint64_t at, size_t n) const;
+    // The archive's bytes from `at`, up to the entry's end: the count read, 0 on an error. Needs no lock of the
+    // entry's: the archive's bytes never change and the file object holds the archive.
+    static size_t read_archive(const Pack &pack, const Node &node, uint64_t at, void *dst, size_t n);
+    // The whole entry, read by the caller outside the entry's lock, becomes its bytes if it is still in the archive.
+    void adopt(Bytes &&whole);
+    // Up to the end, the count read: from the archive while the entry is there (direct or not), else its own bytes.
+    size_t read(uint64_t at, void *dst, size_t n) const;
+    // Grows the entry as far as it reaches, a gap zeroed; false when an entry still in the archive could not be read in.
+    bool write(uint64_t at, const void *src, size_t n);
 
   private:
     std::shared_ptr<Pack> pack_;
-    const uint8_t *view_ = nullptr;
-    uint64_t view_size_ = 0;
-    std::vector<uint8_t> own_;
+    const Node *node_ = nullptr;
+    uint64_t size_ = 0;
+    Bytes own_;
 };
 
 // The name match FindFirstFileA uses (10da9e10 with 10da9d30): pattern and name split at the first '.'.

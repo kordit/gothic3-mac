@@ -398,26 +398,37 @@ void s_read(X86 *c) { // (buf, n)
     std::unique_lock<StreamLock> g(f->pos_m);
     if (f->kind == File::BUFFERED) { // 10da6d90 on the memory stream: up to its end
         std::unique_lock<StreamLock> m(f->mem->m);
-        const uint64_t at = f->pos, size = f->mem->bytes.size();
-        const uint32_t k = at < size ? (uint32_t)std::min<uint64_t>(n, size - at) : 0u;
-        const uint8_t *view = f->mem->bytes.view();
-        // A big read of a mapped entry is where its pages come from the disk now, as the open's read was: off the
-        // main thread it lends the baton, with both locks let go first (the mapped bytes need neither, see EntryBytes).
-        if (view && k >= LEND && !recomp_cur_is_main_thread()) {
+        const uint64_t at = f->pos;
+        // An entry still in the archive is read from the disk here now, as it was at the open: both locks are let go
+        // first (the archive's bytes need neither, see EntryBytes), and a big read off the main thread lends the baton.
+        if (f->mem->bytes.in_archive()) {
+            const bool direct = f->mem->bytes.direct(at, n);
+            const uint64_t want = direct ? std::min<uint64_t>(n, f->node->size - std::min(at, f->node->size))
+                                         : f->node->size;
             m.unlock();
             g.unlock();
-            const bool lend = recomp_host_work_begin();
-            std::memcpy(g_mem + buf, view + at, k);
+            const bool lend = want >= LEND && !recomp_cur_is_main_thread() && recomp_host_work_begin();
+            size_t k = 0;
+            g3fs::Bytes whole;
+            bool ok = true;
+            if (direct) // straight into the reader's buffer
+                k = g3fs::EntryBytes::read_archive(*f->pack, *f->node, at, g_mem + buf, n);
+            else        // a small read: the whole entry once, the reads after it from memory
+                ok = g3fs::pack_read_entry(*f->pack, *f->node, &whole);
             if (lend)
                 recomp_host_work_end();
             g.lock();
-            f->pos = at + k;
-            ret(c, k);
-            return;
+            if (direct || !ok) {
+                f->pos = at + k;
+                ret(c, (uint32_t)k);
+                return;
+            }
+            m.lock();
+            f->mem->bytes.adopt(std::move(whole));
         }
-        f->mem->bytes.read(at, g_mem + buf, k);
+        const size_t k = f->mem->bytes.read(at, g_mem + buf, n);
         f->pos = at + k;
-        ret(c, k);
+        ret(c, (uint32_t)k);
         return;
     }
     // 10da7150: from the archive at the entry's offset, while the position is inside it, not cut at its end
@@ -465,7 +476,10 @@ void s_write(X86 *c) { // (buf, n)
     }
     std::lock_guard<StreamLock> g(f->pos_m); // 10da6df0 on the memory stream, which grows
     std::lock_guard<StreamLock> m(f->mem->m);
-    f->mem->bytes.write(f->pos, g_mem + buf, n);
+    if (!f->mem->bytes.write(f->pos, g_mem + buf, n)) {
+        ret(c, 0);
+        return;
+    }
     f->pos += n;
     ret(c, n);
 }
@@ -764,7 +778,7 @@ void m_create_file(X86 *c) {
         } else { // 10da3a50, 10da3230
             if (!mem) {
                 auto fresh = std::make_shared<Shared>();
-                if (!fresh->bytes.map(hit.pack, *hit.node)) { // zlib, or an archive that did not map: read it now
+                if (!fresh->bytes.refer(hit.pack, *hit.node)) { // zlib: read and inflated now
                     const bool lend =
                         hit.node->size >= LEND && !recomp_cur_is_main_thread() && recomp_host_work_begin();
                     const auto t0 = std::chrono::steady_clock::now();

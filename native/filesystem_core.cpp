@@ -12,7 +12,6 @@ extern "C" int g3fs_name_fits(const char *pattern, const char *name); // filesys
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -312,8 +311,6 @@ void Folder::touch(uint64_t now) {
 }
 
 Pack::~Pack() {
-    if (map)
-        munmap(const_cast<uint8_t *>(map), (size_t)file_size);
     if (fd >= 0)
         close(fd);
 }
@@ -479,13 +476,6 @@ bool pack_load(Pack *pack, std::string *error) { // 10da5830, 10da5a10, 10da5cd0
         *error = "bad tree";
         return false;
     }
-    // Address space only: the pages come in as a stream reads them and stay the kernel's file cache, not this
-    // process's memory. An archive that does not map is read as before.
-    if (pack->file_size) {
-        void *m = mmap(nullptr, (size_t)pack->file_size, PROT_READ, MAP_SHARED, pack->fd, 0);
-        if (m != MAP_FAILED)
-            pack->map = (const uint8_t *)m;
-    }
     return true;
 }
 
@@ -494,7 +484,7 @@ int64_t pack_pread(const Pack &pack, uint64_t at, void *buf, size_t n) {
     return got < 0 ? -1 : (int64_t)got;
 }
 
-bool pack_read_entry(const Pack &pack, const Node &node, std::vector<uint8_t> *out) { // 10da3230, 10da33c0
+bool pack_read_entry(const Pack &pack, const Node &node, Bytes *out) { // 10da3230, 10da33c0
     out->clear();
     const uint32_t size = (uint32_t)node.size, stored = (uint32_t)node.stored;
     if (size == 0 && (node.size >> 32) == 0)
@@ -506,7 +496,7 @@ bool pack_read_entry(const Pack &pack, const Node &node, std::vector<uint8_t> *o
     if ((node.size >> 32) || (node.stored >> 32) || node.offset > pack.file_size ||
         stored > pack.file_size - node.offset || size > (1u << 30))
         return false;
-    std::vector<uint8_t> packed(stored);
+    Bytes packed(stored);
     if (pack_pread(pack, node.offset, packed.data(), stored) != (int64_t)stored)
         return false;
     if (node.compression == 0) {
@@ -525,50 +515,76 @@ bool pack_read_entry(const Pack &pack, const Node &node, std::vector<uint8_t> *o
     return true;
 }
 
-const uint8_t *pack_entry_view(const Pack &pack, const Node &node) {
-    if (!pack.map || node.encryption != 0 || node.compression != 0 || node.size == 0 || node.size != node.stored ||
-        node.offset > pack.file_size || node.stored > pack.file_size - node.offset || node.size > (1u << 30))
-        return nullptr;
-    return pack.map + node.offset;
+bool pack_entry_stored(const Pack &pack, const Node &node) {
+    return pack.fd >= 0 && node.encryption == 0 && node.compression == 0 && node.size != 0 &&
+           node.size == node.stored && node.offset <= pack.file_size && node.stored <= pack.file_size - node.offset &&
+           node.size <= (1u << 30);
 }
 
-bool EntryBytes::map(const std::shared_ptr<Pack> &pack, const Node &node) {
-    const uint8_t *v = pack_entry_view(*pack, node);
-    if (!v)
+bool EntryBytes::refer(const std::shared_ptr<Pack> &pack, const Node &node) {
+    if (!pack_entry_stored(*pack, node))
         return false;
     pack_ = pack;
-    view_ = v;
-    view_size_ = node.size;
+    node_ = &node;
+    size_ = node.size;
     own_.clear();
     return true;
 }
 
 bool EntryBytes::load(const Pack &pack, const Node &node) {
     pack_.reset();
-    view_ = nullptr;
-    view_size_ = 0;
+    node_ = nullptr;
     return pack_read_entry(pack, node, &own_);
 }
 
+bool EntryBytes::direct(uint64_t at, size_t n) const {
+    if (!pack_ || at >= size_)
+        return pack_ != nullptr; // past the end: nothing to read, nothing to read in
+    const uint64_t k = std::min<uint64_t>(n, size_ - at);
+    return k >= DIRECT || (at == 0 && k == size_);
+}
+
+size_t EntryBytes::read_archive(const Pack &pack, const Node &node, uint64_t at, void *dst, size_t n) {
+    const size_t k = at < node.size ? (size_t)std::min<uint64_t>(n, node.size - at) : 0u;
+    if (!k)
+        return 0;
+    const int64_t got = pack_pread(pack, node.offset + at, dst, k);
+    return got > 0 ? (size_t)got : 0u;
+}
+
+void EntryBytes::adopt(Bytes &&whole) {
+    if (!pack_ || whole.size() != size_)
+        return;
+    own_ = std::move(whole);
+    pack_.reset();
+    node_ = nullptr;
+}
+
 size_t EntryBytes::read(uint64_t at, void *dst, size_t n) const {
-    const uint64_t end = size();
-    const size_t k = at < end ? (size_t)std::min<uint64_t>(n, end - at) : 0u;
+    if (pack_)
+        return read_archive(*pack_, *node_, at, dst, n);
+    const size_t k = at < own_.size() ? (size_t)std::min<uint64_t>(n, own_.size() - at) : 0u;
     if (k)
-        std::memcpy(dst, (view_ ? view_ : own_.data()) + at, k);
+        std::memcpy(dst, own_.data() + at, k);
     return k;
 }
 
-void EntryBytes::write(uint64_t at, const void *src, size_t n) {
-    if (view_) { // the first write: the entry's own bytes from here on, the mapping left as the archive has it
-        own_.assign(view_, view_ + view_size_);
-        view_ = nullptr;
-        view_size_ = 0;
+bool EntryBytes::write(uint64_t at, const void *src, size_t n) {
+    if (pack_) { // the first write: the entry's own bytes from here on, the archive left as it is
+        if (!pack_read_entry(*pack_, *node_, &own_))
+            return false;
         pack_.reset();
+        node_ = nullptr;
     }
-    if (own_.size() < at + n)
+    const size_t old = own_.size();
+    if (old < at + n) {
         own_.resize(at + n);
+        if (at > old)
+            std::memset(own_.data() + old, 0, at - old);
+    }
     if (n)
         std::memcpy(own_.data() + at, src, n);
+    return true;
 }
 
 // ---- the module ----
