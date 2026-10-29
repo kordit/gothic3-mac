@@ -5150,7 +5150,14 @@ void Query_GetData(X86 *c) {
             // (host_d9_query_peek), S_FALSE until its count is there, never with a sync. Its Present
             // commits its command buffer, so the count comes without a flush; one ended in this frame
             // still goes the old way, so a game spinning on it sends it to the GPU as before.
+            //
+            // Without FLUSH nothing is sent and nothing waits, as in D3D9: the count the render thread
+            // has published, else S_FALSE. Gothic 3 polls the head of its query queue this way between
+            // traversal steps (Engine 103fe9df) and every free handle before it reuses one (104041e0);
+            // each of those polls was a render-thread sync, and one on a query of this frame a commit
+            // that split the render pass. It waits with FLUSH once it has nothing else to do (103feb5b).
             QueryState &st = it->second;
+            const bool flush = (flags & 1) != 0;
             int r;
             if (st.counted && g_query_keep)
                 r = 1, count = st.count;
@@ -5164,10 +5171,10 @@ void Query_GetData(X86 *c) {
                 static const bool nosync_env = nosync_text ? strtoul(nosync_text, nullptr, 10) != 0
                                                            : RECOMP_D3D9_QUERY_NOSYNC_DEFAULT != 0;
                 const bool nosync = g_query_nosync < 0 ? nosync_env : g_query_nosync != 0;
-                r = nosync && st.present != g_presents ? host_d9_query_peek(q->id, &count) : -2;
+                r = nosync && (st.present != g_presents || !flush) ? host_d9_query_peek(q->id, &count) : -2;
                 if (r == -2) {
                     PhaseWait phase("query wait");
-                    r = host_d9_query_result(q->id, &count, wait ? 1 : 0);
+                    r = host_d9_query_result(q->id, &count, wait && flush ? 1 : 0);
                 }
             }
             if (r == 0 && (wait || !(flags & 1))) {

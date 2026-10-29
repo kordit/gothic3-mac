@@ -468,6 +468,9 @@ extern "C" int host_d9_texture_read_poll(uint32_t ticket, uint8_t *b, uint32_t p
 extern "C" void host_d9_texture_read_forget(uint32_t) {
     ++rb_forgets;
 }
+extern "C" int host_d9_texture_reads_back(uint32_t) {
+    return 0;
+}
 extern "C" int host_d9_texture_read(uint32_t, uint32_t, uint32_t, uint8_t *b, uint32_t pitch) {
     ++rb_sync_reads;
     memset(b, 0x55, (size_t)pitch * 4);
@@ -758,10 +761,11 @@ static void test_fvf(uint32_t dev) {
 
 // Occlusion queries as the renderer answers them: a count published without a sync (host_d9_query_peek) or one
 // asked for with a sync (host_d9_query_result), counted here.
-static int query_results_asked = 0, query_peeks = 0, query_peek_answer = -2;
+static int query_results_asked = 0, query_peeks = 0, query_peek_answer = -2, query_flushed = -1;
 static uint32_t query_peek_count = 0;
-extern "C" int host_d9_query_result(uint32_t, uint32_t *count, int) {
+extern "C" int host_d9_query_result(uint32_t, uint32_t *count, int flush) {
     ++query_results_asked;
+    query_flushed = flush;
     *count = 77;
     return 1;
 }
@@ -790,6 +794,28 @@ static void test_query_nosync(uint32_t dev) {
     CHECK(rd32(sc(0x904)) == 77u);
     CHECK(query_results_asked == 1);
     CHECK(query_peeks == 0);
+    CHECK(query_flushed == 1);
+
+    // Ended in this frame and polled without FLUSH: the published counts only, nothing sent (Gothic 3's
+    // traversal polls its queue head so between steps); FLUSH then asks with a sync that sends it.
+    CHECK(call_method(q, 6, {2}) == 0);
+    CHECK(call_method(q, 6, {1}) == 0);
+    query_results_asked = query_peeks = 0;
+    query_peek_answer = 0;
+    CHECK(get(0) == 1); // S_FALSE
+    CHECK(query_results_asked == 0);
+    CHECK(query_peeks == 1);
+    query_peek_answer = -2; // not tracked: a sync, but no flush
+    CHECK(get(0) == 0);
+    CHECK(query_results_asked == 1);
+    CHECK(query_flushed == 0);
+    CHECK(call_method(q, 6, {2}) == 0);
+    CHECK(call_method(q, 6, {1}) == 0);
+    query_results_asked = query_peeks = 0;
+    CHECK(get(1) == 0);
+    CHECK(query_results_asked == 1);
+    CHECK(query_peeks == 0);
+    CHECK(query_flushed == 1);
 
     // Ended before the last Present: the published counts only.
     CHECK(call_method(q, 6, {2}) == 0);
