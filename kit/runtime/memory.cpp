@@ -329,15 +329,58 @@ std::recursive_mutex g_heap_mutex;
 std::map<uint32_t, Blk> *g_blocks = nullptr;
 std::set<uint32_t> *g_free = nullptr;
 uint64_t g_total_allocs = 0, g_total_frees = 0;
-// Gothic 3 session 16 part 2: first fit walked every free block from the bottom, and a fragmented heap has
-// thousands of small ones there (a quick load: HeapAlloc 1.4 s of the game thread's 28 s). g_low[c]: every free
-// block below it is smaller than 1 << c, so a request of at least 1 << c bytes starts its walk there and gets the
-// block first fit always gave it. A free block that appears or grows lowers the bounds its size reaches.
-uint32_t g_low[32];
-inline void low_note(uint32_t addr, uint32_t size) {
-    for (int c = 0; c < 32 && (1u << c) <= size; ++c)
-        if (addr < g_low[c])
-            g_low[c] = addr;
+// The first free block at or above an address that is at least so large, without walking the smaller ones.
+// Gothic 3 session 27: first fit walked the free blocks from a per-size-class bound up, and in a fragmented heap
+// most of those are free blocks of the request's class that are still too small (SpeedTree's loads: 375 ms of a
+// 2.4 s freeze in heap_alloc_side's own loop). Free blocks are grouped by the 4 KB page their start is in; g_fmax
+// is a segment tree over the pages holding the largest free block that starts in each, so the first page that can
+// hold a request is found in log steps and only that page's free blocks are looked at. The order is the address
+// order the walk had, so every request gets the block first fit always gave it.
+constexpr uint32_t kFreePageShift = 12, kFreePages = 1u << (32 - kFreePageShift);
+bool g_check_fit = false;      // heap_check_fit
+uint64_t g_fit_mismatches = 0;
+uint32_t *g_fmax = nullptr; // [2 * kFreePages]: node i covers its children 2i, 2i+1; leaves from kFreePages
+void free_page_update(uint32_t addr) {
+    if (!g_fmax)
+        return;
+    const uint32_t page = addr >> kFreePageShift, lo = page << kFreePageShift;
+    uint32_t best = 0;
+    for (auto fi = g_free->lower_bound(lo); fi != g_free->end() && (*fi >> kFreePageShift) == page; ++fi) {
+        auto it = g_blocks->find(*fi);
+        if (it != g_blocks->end() && !it->second.used && it->second.size > best)
+            best = it->second.size;
+    }
+    uint32_t i = kFreePages + page;
+    if (g_fmax[i] == best)
+        return;
+    g_fmax[i] = best;
+    for (i >>= 1; i; i >>= 1) {
+        const uint32_t m = std::max(g_fmax[2 * i], g_fmax[2 * i + 1]);
+        if (g_fmax[i] == m)
+            break;
+        g_fmax[i] = m;
+    }
+}
+// The first page at or above `page` that has a free block of at least `need` bytes starting in it, or kFreePages.
+uint32_t free_page_find(uint32_t page, uint32_t need) {
+    if (page >= kFreePages || g_fmax[1] < need)
+        return kFreePages;
+    uint32_t i = kFreePages + page;
+    if (g_fmax[i] >= need)
+        return page;
+    // up until a right sibling covers a page that can hold it, then down to the leftmost such page
+    for (;;) {
+        if (i == 1)
+            return kFreePages;
+        if (!(i & 1) && g_fmax[i + 1] >= need) {
+            ++i;
+            break;
+        }
+        i >>= 1;
+    }
+    while (i < kFreePages)
+        i = g_fmax[2 * i] >= need ? 2 * i : 2 * i + 1;
+    return i - kFreePages;
 }
 
 inline uint32_t align_up(uint32_t v, uint32_t a) {
@@ -359,17 +402,18 @@ inline bool size_is_sane(uint32_t size) {
 // Records a block, keeping the free index in step.
 void put_block(uint32_t addr, uint32_t size, uint32_t req, bool used) {
     (*g_blocks)[addr] = Blk{size, req, used};
-    if (used) {
+    if (used)
         g_free->erase(addr);
-    } else {
+    else
         g_free->insert(addr);
-        low_note(addr, size);
-    }
+    free_page_update(addr);
 }
 
 void drop_block(std::map<uint32_t, Blk>::iterator it) {
-    g_free->erase(it->first);
+    const uint32_t addr = it->first;
+    g_free->erase(addr);
     g_blocks->erase(it);
+    free_page_update(addr);
 }
 
 // The kit span (NFSMW issue 8, 3.0.4): the top 32 MB of the extra heap span hold the kit's own objects - DirectSound
@@ -408,8 +452,9 @@ void heap_reset() {
         g_free = new std::set<uint32_t>();
     g_blocks->clear();
     g_free->clear();
-    for (uint32_t &l : g_low)
-        l = 0;
+    if (!g_fmax)
+        g_fmax = new uint32_t[2 * (size_t)kFreePages];
+    memset(g_fmax, 0, 2 * (size_t)kFreePages * sizeof *g_fmax);
     put_block(HEAP_BASE, HEAP_LIMIT - HEAP_BASE, 0, false);
     g_kit_lo = g_kit_hi = 0;
     if (GUEST_HEAP_EXTRA_SIZE >= 4 * KIT_SPAN_BYTES && kit_span_enabled()) {
@@ -543,8 +588,10 @@ uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
         align = 16;
     uint32_t need = align_up(size ? size : 1, 16);
 
-    // RECOMP_HEAP_CHECK_FIT=1: the walk from the bottom as well, and any other block it would have taken logged.
-    static const bool check_fit = recomp_env("HEAP_CHECK_FIT") != nullptr;
+    // RECOMP_HEAP_CHECK_FIT=1 (or heap_check_fit): the walk from the bottom as well, and any other block it would
+    // have taken logged and counted.
+    static const bool check_fit_env = recomp_env("HEAP_CHECK_FIT") != nullptr;
+    const bool check_fit = check_fit_env || g_check_fit;
     uint32_t ref = 0;
     if (check_fit && !kit)
         for (uint32_t start : *g_free) {
@@ -557,44 +604,47 @@ uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
                 break;
             }
         }
-    // The kit's own requests are few and live at the top: they walk from the bottom as before.
-    const int cls = 31 - __builtin_clz(need);
-    bool below = !kit; // every block walked so far is smaller than 1 << cls
-    for (auto fi = g_free->lower_bound(kit ? 0u : g_low[cls]); fi != g_free->end(); ++fi) {
-        const uint32_t start = *fi;
-        auto it = g_blocks->find(start);
-        if (below && (it == g_blocks->end() || it->second.size >= (1u << cls))) {
-            g_low[cls] = start;
-            below = false;
-        }
-        if (kit_side(start) != kit)
-            continue; // the other side of the kit span's edge
-        if (it == g_blocks->end() || it->second.used)
-            continue; // index out of step
-        uint32_t len = it->second.size;
-        uint32_t user = align_up(start, align);
-        if (user < start)
-            continue; // overflow
-        uint32_t pad = user - start;
-        if (pad > len || need > len - pad)
-            continue; // does not fit
+    // Only free blocks of at least `need` bytes can fit, so the walk visits those alone, in address order: the page
+    // index gives the next page that has one, and that page's free blocks are looked at in order.
+    const uint32_t from = kit ? g_kit_lo : 0u;
+    for (uint32_t page = free_page_find(from >> kFreePageShift, need); page < kFreePages;
+         page = free_page_find(page + 1u, need)) {
+        for (auto fi = g_free->lower_bound(std::max(from, page << kFreePageShift));
+             fi != g_free->end() && (*fi >> kFreePageShift) == page; ++fi) {
+            const uint32_t start = *fi;
+            auto it = g_blocks->find(start);
+            if (kit_side(start) != kit)
+                continue; // the other side of the kit span's edge
+            if (it == g_blocks->end() || it->second.used)
+                continue; // index out of step
+            uint32_t len = it->second.size;
+            if (len < need)
+                continue;
+            uint32_t user = align_up(start, align);
+            if (user < start)
+                continue; // overflow
+            uint32_t pad = user - start;
+            if (pad > len || need > len - pad)
+                continue; // does not fit
 
-        uint32_t tail = len - pad - need;
-        if (check_fit && !kit && ref != start) {
-            static int told;
-            if (told++ < 20)
-                LOGW("heap_alloc: check: %u bytes from %08x, first fit from the bottom gives %08x", size, start, ref);
+            uint32_t tail = len - pad - need;
+            if (check_fit && !kit && ref != start) {
+                ++g_fit_mismatches;
+                static int told;
+                if (told++ < 20)
+                    LOGW("heap_alloc: check: %u bytes from %08x, first fit from the bottom gives %08x", size, start, ref);
+            }
+            drop_block(it);
+            if (pad)
+                put_block(start, pad, 0, false);
+            put_block(user, need, size, true);
+            if (tail)
+                put_block(user + need, tail, 0, false);
+            if (zero)
+                memset(g_mem + user, 0, need);
+            ++g_total_allocs;
+            return user;
         }
-        drop_block(it);
-        if (pad)
-            put_block(start, pad, 0, false);
-        put_block(user, need, size, true);
-        if (tail)
-            put_block(user + need, tail, 0, false);
-        if (zero)
-            memset(g_mem + user, 0, need);
-        ++g_total_allocs;
-        return user;
     }
     if (!kit) {
         LOGW("heap_alloc: out of guest heap (%u bytes requested)", size);
@@ -624,6 +674,13 @@ uint32_t heap_alloc_side(uint32_t size, bool zero, uint32_t align, bool kit) {
     return 0;
 }
 } // namespace
+
+uint64_t heap_check_fit(int on) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
+    if (on >= 0)
+        g_check_fit = on != 0;
+    return g_fit_mismatches;
+}
 
 bool heap_owns(uint32_t addr) {
     std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
@@ -681,6 +738,7 @@ bool heap_free(uint32_t addr) {
     if (quarantine)
         return true;
     g_free->insert(addr);
+    free_page_update(addr);
 
     // Coalesce with the following block.
     auto next = std::next(it);
@@ -698,7 +756,7 @@ bool heap_free(uint32_t addr) {
             it = prev;
         }
     }
-    low_note(it->first, it->second.size);
+    free_page_update(it->first);
     return true;
 }
 
@@ -1028,6 +1086,23 @@ std::string heap_check() {
         snprintf(buf, sizeof buf, "free index has %zu entries, the heap has %zu free blocks",
                  g_free->size(), free_count);
         return buf;
+    }
+    if (g_fmax) {
+        std::vector<uint32_t> page_max;
+        for (uint32_t a : *g_free) {
+            const uint32_t page = a >> kFreePageShift, size = g_blocks->find(a)->second.size;
+            if (g_fmax[kFreePages + page] < size) {
+                snprintf(buf, sizeof buf, "page index holds %u for page %05x, its free block %08x has %u",
+                         g_fmax[kFreePages + page], page, a, size);
+                return buf;
+            }
+        }
+        for (uint32_t i = kFreePages - 1; i >= 1; --i)
+            if (g_fmax[i] != std::max(g_fmax[2 * i], g_fmax[2 * i + 1])) {
+                snprintf(buf, sizeof buf, "page index node %u holds %u, its children %u and %u", i, g_fmax[i],
+                         g_fmax[2 * i], g_fmax[2 * i + 1]);
+                return buf;
+            }
     }
     return std::string();
 }

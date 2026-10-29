@@ -1209,6 +1209,55 @@ static void test_allocator() {
     heap_free(a2);
     check(heap_check().empty(), "heap is consistent after freeing everything");
 
+    // First fit through the page index (Gothic 3 session 27) against the walk from the bottom: random sizes from 1
+    // byte to 300 KB, alignments 16 to 4096, frees and reallocs that grow, shrink and move, so the heap fragments
+    // into many small free blocks below the large ones, as a long load leaves it.
+    {
+        const uint64_t before = heap_check_fit(1);
+        std::vector<uint32_t> live;
+        uint64_t rng = 0x2545f4914f6cdd1dull;
+        auto rnd = [&rng] {
+            rng ^= rng << 13;
+            rng ^= rng >> 7;
+            rng ^= rng << 17;
+            return (uint32_t)(rng >> 16);
+        };
+        bool consistent = true;
+        unsigned allocs = 0;
+        for (int i = 0; i < 40000 && consistent; ++i) {
+            const uint32_t op = rnd() % 10;
+            if (op < 5 || live.empty()) {
+                const uint32_t kind = rnd() % 16;
+                const uint32_t size = kind < 10 ? 1 + rnd() % 96 : kind < 14 ? 1 + rnd() % 4000 : 1 + rnd() % 300000;
+                const uint32_t align = rnd() % 8 == 0 ? (16u << (rnd() % 9)) : 16u;
+                if (const uint32_t a = heap_alloc(size, rnd() & 1, align)) {
+                    live.push_back(a);
+                    ++allocs;
+                }
+            } else if (op < 9) {
+                const size_t k = rnd() % live.size();
+                heap_free(live[k]);
+                live[k] = live.back();
+                live.pop_back();
+            } else {
+                const size_t k = rnd() % live.size();
+                if (const uint32_t a = heap_realloc(live[k], 1 + rnd() % 8000))
+                    live[k] = a;
+            }
+            if (i % 2000 == 0)
+                consistent = heap_check().empty();
+        }
+        const uint64_t mismatches = heap_check_fit(0) - before;
+        check(consistent, "the heap and its page index stay consistent under random churn: %s",
+              heap_check().empty() ? "yes" : heap_check().c_str());
+        check(mismatches == 0, "first fit through the page index took the bottom walk's block in all %u allocations "
+                               "(%llu others)",
+              allocs, (unsigned long long)mismatches);
+        for (uint32_t a : live)
+            heap_free(a);
+        check(heap_check().empty(), "heap is consistent after the churn is freed");
+    }
+
     uint32_t page = heap_alloc(4096, true, 4096);
     check(page && (page & 4095) == 0, "4096-aligned allocation at %08x", page);
     bool zero = true;
