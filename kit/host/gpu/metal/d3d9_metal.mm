@@ -3832,6 +3832,7 @@ class Renderer final : public D9Backend {
         bool overflow = false;
         bool ended = false;
         bool probed = false; // begun in a probe frame: its count is printed when it is read
+        double wait_t0 = 0;  // when a FLUSH read first found it not run (the wait report)
     };
     void query_begin(uint32_t id) override {
         if (trace_)
@@ -3904,7 +3905,17 @@ class Renderer final : public D9Backend {
                         flush();
                         break;
                     }
+            if (send && !q.wait_t0) {
+                q.wait_t0 = CACurrentMediaTime();
+                if (present_serial_ > completed_.load())
+                    ++waits_behind_present_;
+            }
             return 0;
+        }
+        if (q.wait_t0) {
+            wait_us_ += (uint64_t)((CACurrentMediaTime() - q.wait_t0) * 1e6);
+            ++waits_;
+            q.wait_t0 = 0;
         }
         *count = (uint32_t)std::min<uint64_t>(q.counted, 0xffffffffu);
         if (q.probed) {
@@ -4832,6 +4843,7 @@ class Renderer final : public D9Backend {
         keep_presented(t, w, h);
         dump_frame_if_due(t, w, h);
         flush();
+        present_serial_ = committed_;
         uint64_t trace_frame = trace_ ? trace_->current_frame_number() : 0;
         uint64_t present_wall_us = os_wall_time_us();
         CaptureMarker capture_marker;
@@ -4934,10 +4946,19 @@ class Renderer final : public D9Backend {
             device_->commit(cb);
         }
         ++presents_;
-        if (presents_ % 600 == 0 && send_aheads_) {
-            fprintf(stderr, "[d3d9 metal] send ahead: %llu commits in the last 600 frames\n",
-                    (unsigned long long)send_aheads_);
-            send_aheads_ = 0;
+        if (presents_ % 600 == 0 && (send_aheads_ || waits_)) {
+            // Where a wait for a query goes: a command buffer's time from the kernel to the GPU, on the GPU, and
+            // from its end on the GPU to its completed handler, which is when its counts can be read.
+            const uint64_t n = cb_stats_.n.exchange(0), queued = cb_stats_.queued_us.exchange(0),
+                           run = cb_stats_.run_us.exchange(0), told = cb_stats_.told_us.exchange(0);
+            fprintf(stderr,
+                    "[d3d9 metal] send ahead: %llu commits in the last 600 frames; query waits %.1f a frame, "
+                    "%.0f us each, %llu begun behind the last Present's buffer; command buffers %.1f a frame: "
+                    "queued %.0f us, run %.0f us, handler after %.0f us\n",
+                    (unsigned long long)send_aheads_, waits_ / 600.0, waits_ ? (double)wait_us_ / waits_ : 0.0,
+                    (unsigned long long)waits_behind_present_, n / 600.0, n ? (double)queued / n : 0.0,
+                    n ? (double)run / n : 0.0, n ? (double)told / n : 0.0);
+            send_aheads_ = waits_ = wait_us_ = waits_behind_present_ = 0;
         }
         g_host_game_gpu_frames.fetch_add(1, std::memory_order_relaxed);
         capture_scope_frame();   // run 20: one capture scope per game frame (MTL_CAPTURE_ENABLED=1 only)
@@ -8081,11 +8102,20 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         uint64_t serial = serial_;
         std::atomic<uint64_t> *done = &completed_;
         std::atomic<uint64_t> *gpu_us = &gpu_us_;
+        CbStats *stats = &cb_stats_;
         [cmd_ addCompletedHandler:^(id<MTLCommandBuffer> cb) {
           if (cb.GPUEndTime > cb.GPUStartTime) {
               const uint64_t us = (uint64_t)((cb.GPUEndTime - cb.GPUStartTime) * 1e6);
               gpu_us->fetch_add(us);
               g_host_game_gpu_us.fetch_add(us, std::memory_order_relaxed); // Test83: the overlay's GPU
+              if (cb.kernelStartTime > 0 && cb.GPUStartTime >= cb.kernelStartTime) {
+                  stats->n.fetch_add(1, std::memory_order_relaxed);
+                  stats->run_us.fetch_add(us, std::memory_order_relaxed);
+                  stats->queued_us.fetch_add((uint64_t)((cb.GPUStartTime - cb.kernelStartTime) * 1e6),
+                                             std::memory_order_relaxed);
+                  stats->told_us.fetch_add((uint64_t)((CACurrentMediaTime() - cb.GPUEndTime) * 1e6),
+                                           std::memory_order_relaxed);
+              }
           }
           if (cb.error)
               fprintf(stderr, "d3d9 metal: command buffer failed: %s\n",
@@ -8965,6 +8995,11 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
     uint64_t committed_ = 0, cmd_draws_ = 0, send_aheads_ = 0; // send_ahead: the last committed serial, draws_ at
                                                                // the open buffer's start, commits so far
     static constexpr uint64_t kSendAheadDraws = 64;
+    uint64_t waits_ = 0, wait_us_ = 0; // FLUSH reads that waited for a query, and how long, since the last report
+    uint64_t waits_behind_present_ = 0, present_serial_ = 0; // of those, begun while the last Present's buffer ran
+    struct CbStats {
+        std::atomic<uint64_t> n{0}, queued_us{0}, run_us{0}, told_us{0};
+    } cb_stats_;
     uint64_t submitted_ = 0, pass_serial_ = 0;
     uint32_t resource_generation_ = 0, trace_flushes_ = 0;
     uint64_t trace_bytes_ = 0, burst_trace_start_ = 0, burst_pixel_bytes_ = 0, burst_start_ = 0;
