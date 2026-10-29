@@ -205,7 +205,7 @@ using StreamLock = std::mutex;
 
 struct Shared { // a buffered entry's bytes, shared by its open streams as the entry's memory stream is
     StreamLock m;
-    std::vector<uint8_t> bytes;
+    g3fs::EntryBytes bytes;
 };
 std::unordered_map<const g3fs::Node *, std::weak_ptr<Shared>> g_buffered;
 
@@ -397,11 +397,26 @@ void s_read(X86 *c) { // (buf, n)
     }
     std::unique_lock<StreamLock> g(f->pos_m);
     if (f->kind == File::BUFFERED) { // 10da6d90 on the memory stream: up to its end
-        std::lock_guard<StreamLock> m(f->mem->m);
-        const uint64_t size = f->mem->bytes.size();
-        const uint32_t k = f->pos < size ? (uint32_t)std::min<uint64_t>(n, size - f->pos) : 0u;
-        std::memcpy(g_mem + buf, f->mem->bytes.data() + f->pos, k);
-        f->pos += k;
+        std::unique_lock<StreamLock> m(f->mem->m);
+        const uint64_t at = f->pos, size = f->mem->bytes.size();
+        const uint32_t k = at < size ? (uint32_t)std::min<uint64_t>(n, size - at) : 0u;
+        const uint8_t *view = f->mem->bytes.view();
+        // A big read of a mapped entry is where its pages come from the disk now, as the open's read was: off the
+        // main thread it lends the baton, with both locks let go first (the mapped bytes need neither, see EntryBytes).
+        if (view && k >= LEND && !recomp_cur_is_main_thread()) {
+            m.unlock();
+            g.unlock();
+            const bool lend = recomp_host_work_begin();
+            std::memcpy(g_mem + buf, view + at, k);
+            if (lend)
+                recomp_host_work_end();
+            g.lock();
+            f->pos = at + k;
+            ret(c, k);
+            return;
+        }
+        f->mem->bytes.read(at, g_mem + buf, k);
+        f->pos = at + k;
         ret(c, k);
         return;
     }
@@ -450,9 +465,7 @@ void s_write(X86 *c) { // (buf, n)
     }
     std::lock_guard<StreamLock> g(f->pos_m); // 10da6df0 on the memory stream, which grows
     std::lock_guard<StreamLock> m(f->mem->m);
-    if (f->mem->bytes.size() < f->pos + n)
-        f->mem->bytes.resize(f->pos + n);
-    std::memcpy(f->mem->bytes.data() + f->pos, g_mem + buf, n);
+    f->mem->bytes.write(f->pos, g_mem + buf, n);
     f->pos += n;
     ret(c, n);
 }
@@ -751,23 +764,25 @@ void m_create_file(X86 *c) {
         } else { // 10da3a50, 10da3230
             if (!mem) {
                 auto fresh = std::make_shared<Shared>();
-                const bool lend =
-                    hit.node->size >= LEND && !recomp_cur_is_main_thread() && recomp_host_work_begin();
-                const auto t0 = std::chrono::steady_clock::now();
-                const bool ok = g3fs::pack_read_entry(*hit.pack, *hit.node, &fresh->bytes);
-                const double ms =
-                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
-                if (lend)
-                    recomp_host_work_end();
-                // An entry that costs a frame (session 21: up to 275 ms of inflate under Engine's Prefetch on the
-                // game thread): which one, from which archive, how big.
-                if (ms >= 20.0)
-                    fprintf(stderr, "[g3fs] read %s took %.1f ms (%.1f MB packed, %.1f MB, %s, %s thread)\n",
-                            path.c_str(), ms, hit.node->stored / 1048576.0, hit.node->size / 1048576.0,
-                            hit.pack->path.c_str(), recomp_cur_is_main_thread() ? "main" : "other");
-                if (!ok) {
-                    ret(c, 0);
-                    return;
+                if (!fresh->bytes.map(hit.pack, *hit.node)) { // zlib, or an archive that did not map: read it now
+                    const bool lend =
+                        hit.node->size >= LEND && !recomp_cur_is_main_thread() && recomp_host_work_begin();
+                    const auto t0 = std::chrono::steady_clock::now();
+                    const bool ok = fresh->bytes.load(*hit.pack, *hit.node);
+                    const double ms =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+                    if (lend)
+                        recomp_host_work_end();
+                    // An entry that costs a frame (session 21: up to 275 ms of inflate under Engine's Prefetch on the
+                    // game thread): which one, from which archive, how big.
+                    if (ms >= 20.0)
+                        fprintf(stderr, "[g3fs] read %s took %.1f ms (%.1f MB packed, %.1f MB, %s, %s thread)\n",
+                                path.c_str(), ms, hit.node->stored / 1048576.0, hit.node->size / 1048576.0,
+                                hit.pack->path.c_str(), recomp_cur_is_main_thread() ? "main" : "other");
+                    if (!ok) {
+                        ret(c, 0);
+                        return;
+                    }
                 }
                 std::lock_guard<std::mutex> g(g_lock);
                 auto &slot = g_buffered[hit.node];

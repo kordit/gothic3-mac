@@ -12,6 +12,7 @@ extern "C" int g3fs_name_fits(const char *pattern, const char *name); // filesys
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -311,6 +312,8 @@ void Folder::touch(uint64_t now) {
 }
 
 Pack::~Pack() {
+    if (map)
+        munmap(const_cast<uint8_t *>(map), (size_t)file_size);
     if (fd >= 0)
         close(fd);
 }
@@ -476,6 +479,13 @@ bool pack_load(Pack *pack, std::string *error) { // 10da5830, 10da5a10, 10da5cd0
         *error = "bad tree";
         return false;
     }
+    // Address space only: the pages come in as a stream reads them and stay the kernel's file cache, not this
+    // process's memory. An archive that does not map is read as before.
+    if (pack->file_size) {
+        void *m = mmap(nullptr, (size_t)pack->file_size, PROT_READ, MAP_SHARED, pack->fd, 0);
+        if (m != MAP_FAILED)
+            pack->map = (const uint8_t *)m;
+    }
     return true;
 }
 
@@ -513,6 +523,52 @@ bool pack_read_entry(const Pack &pack, const Node &node, std::vector<uint8_t> *o
         return false;
     }
     return true;
+}
+
+const uint8_t *pack_entry_view(const Pack &pack, const Node &node) {
+    if (!pack.map || node.encryption != 0 || node.compression != 0 || node.size == 0 || node.size != node.stored ||
+        node.offset > pack.file_size || node.stored > pack.file_size - node.offset || node.size > (1u << 30))
+        return nullptr;
+    return pack.map + node.offset;
+}
+
+bool EntryBytes::map(const std::shared_ptr<Pack> &pack, const Node &node) {
+    const uint8_t *v = pack_entry_view(*pack, node);
+    if (!v)
+        return false;
+    pack_ = pack;
+    view_ = v;
+    view_size_ = node.size;
+    own_.clear();
+    return true;
+}
+
+bool EntryBytes::load(const Pack &pack, const Node &node) {
+    pack_.reset();
+    view_ = nullptr;
+    view_size_ = 0;
+    return pack_read_entry(pack, node, &own_);
+}
+
+size_t EntryBytes::read(uint64_t at, void *dst, size_t n) const {
+    const uint64_t end = size();
+    const size_t k = at < end ? (size_t)std::min<uint64_t>(n, end - at) : 0u;
+    if (k)
+        std::memcpy(dst, (view_ ? view_ : own_.data()) + at, k);
+    return k;
+}
+
+void EntryBytes::write(uint64_t at, const void *src, size_t n) {
+    if (view_) { // the first write: the entry's own bytes from here on, the mapping left as the archive has it
+        own_.assign(view_, view_ + view_size_);
+        view_ = nullptr;
+        view_size_ = 0;
+        pack_.reset();
+    }
+    if (own_.size() < at + n)
+        own_.resize(at + n);
+    if (n)
+        std::memcpy(own_.data() + at, src, n);
 }
 
 // ---- the module ----

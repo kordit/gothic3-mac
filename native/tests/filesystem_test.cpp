@@ -7,7 +7,9 @@
 // walks every mounted folder the way AddDirToCache does (FindFirstFileA "<folder>/*.*" and down every directory) and
 // prints one line per file: the virtual path, the size, the attributes and where an open gets it from (an archive's
 // file name, or "disk"). tools/g3pak.py index computes the same lines on its own from the archives' trees.
-// read <archive>...: every entry read and inflated, its length checked.
+// read <archive>...: every entry read and inflated, its length checked; a stored entry also read through
+// g3fs::EntryBytes from the archive's mapping (whole, then in pieces) and compared with the read, and its first write
+// checked to give it its own bytes while the mapping keeps the archive's.
 // scratch <dir>: create, write-time, delete and attribute calls on a temporary folder, checked against the contract.
 // names <game> <extended 0|1>: for the names of every mounted folder (up to 1500 a folder), finds without wildcards
 // (the name, other case, a '.' after it, without its extension, one that is not there) answered by the archives' maps
@@ -324,32 +326,106 @@ int scratch(const std::string &dir) {
     return failures ? 1 : 0;
 }
 
-// Every entry of the archives read as an open reads it (stored copied, zlib inflated), its length checked.
+// A stored entry through EntryBytes over the mapping, against `data` (pack_read_entry's bytes): the size, the whole
+// read, reads in uneven pieces and past the end, then a write in the middle and one past the end, after which the
+// entry holds its own bytes and the mapping still the archive's. Returns what failed, "" for nothing.
+std::string check_mapped(const std::shared_ptr<g3fs::Pack> &pack, const g3fs::Node &node,
+                         const std::vector<uint8_t> &data) {
+    g3fs::EntryBytes e;
+    if (!e.map(pack, node))
+        return "does not map";
+    const uint8_t *view = e.view();
+    if (!view || view != g3fs::pack_entry_view(*pack, node) || e.size() != data.size())
+        return "view or size";
+    std::vector<uint8_t> got(data.size() + 7, 0xcd);
+    if (e.read(0, got.data(), got.size()) != data.size() || std::memcmp(got.data(), data.data(), data.size()))
+        return "whole read";
+    static const size_t pieces[] = {1, 3, 4096, 65537};
+    size_t at = 0;
+    for (int i = 0; at < data.size(); ++i) {
+        const size_t want = pieces[i % 4];
+        const size_t k = e.read(at, got.data(), want);
+        if (k != std::min(want, data.size() - at) || std::memcmp(got.data(), data.data() + at, k))
+            return "piece at " + std::to_string(at);
+        at += k;
+    }
+    if (e.read(data.size(), got.data(), 1) != 0 || e.read(data.size() + 5, got.data(), 1) != 0)
+        return "read past the end";
+    const size_t mid = data.size() / 2;
+    const uint8_t mark[2] = {(uint8_t)~data[mid], 0x5a};
+    e.write(mid, mark, 1);
+    if (e.view() || e.size() != data.size())
+        return "first write keeps the view";
+    if (std::memcmp(view, data.data(), data.size()))
+        return "write reached the mapping";
+    std::vector<uint8_t> want = data;
+    want[mid] = mark[0];
+    e.write(data.size() + 3, mark + 1, 1); // grows; the gap is zero as the memory stream's is
+    want.resize(data.size() + 4, 0);
+    want.back() = mark[1];
+    got.assign(want.size(), 0xcd);
+    if (e.size() != want.size() || e.read(0, got.data(), got.size()) != want.size() || got != want)
+        return "own bytes after the writes";
+    return std::string();
+}
+
+// Every entry of the archives read as an open reads it (stored copied, zlib inflated), its length checked; a stored
+// one also through the mapping (check_mapped).
 int read_all(int n, char **paths) {
-    unsigned long long entries = 0, bytes = 0, bad = 0;
+    unsigned long long entries = 0, bytes = 0, bad = 0, mapped = 0;
+    double t_read = 0, t_map = 0;
     for (int i = 0; i < n; ++i) {
-        g3fs::Pack pack;
-        pack.path = pack.host_path = paths[i];
+        auto pack = std::make_shared<g3fs::Pack>();
+        pack->path = pack->host_path = paths[i];
         std::string error;
-        if (!g3fs::pack_load(&pack, &error)) {
+        if (!g3fs::pack_load(pack.get(), &error)) {
             printf("FAIL %s: %s\n", paths[i], error.c_str());
             ++bad;
             continue;
         }
+        if (!pack->map) {
+            printf("FAIL %s: not mapped\n", paths[i]);
+            ++bad;
+        }
         std::vector<uint8_t> data;
-        for (const g3fs::Node &node : pack.nodes) {
+        for (const g3fs::Node &node : pack->nodes) {
             if (node.folder)
                 continue;
             ++entries;
-            if (!g3fs::pack_read_entry(pack, node, &data) || data.size() != node.size) {
+            const auto t0 = std::chrono::steady_clock::now();
+            if (!g3fs::pack_read_entry(*pack, node, &data) || data.size() != node.size) {
                 if (bad < 20)
                     printf("FAIL %s: %s\n", paths[i], node.path.c_str());
                 ++bad;
+                continue;
             }
+            const auto t1 = std::chrono::steady_clock::now();
+            t_read += std::chrono::duration<double>(t1 - t0).count();
             bytes += data.size();
+            const bool stored = node.compression == 0 && node.encryption == 0 && node.size != 0;
+            if (stored != (g3fs::pack_entry_view(*pack, node) != nullptr)) {
+                if (bad < 20)
+                    printf("FAIL %s: %s: view for a %s entry\n", paths[i], node.path.c_str(),
+                           stored ? "stored" : "zlib or empty");
+                ++bad;
+                continue;
+            }
+            if (!stored)
+                continue;
+            ++mapped;
+            const auto t2 = std::chrono::steady_clock::now();
+            const std::string why = check_mapped(pack, node, data);
+            t_map += std::chrono::duration<double>(std::chrono::steady_clock::now() - t2).count();
+            if (!why.empty()) {
+                if (bad < 20)
+                    printf("FAIL %s: %s: mapped, %s\n", paths[i], node.path.c_str(), why.c_str());
+                ++bad;
+            }
         }
     }
-    printf("read: %llu entries, %llu MB, %llu failures\n", entries, bytes >> 20, bad);
+    printf("read: %llu entries (%llu stored, through the mapping too), %llu MB, %llu failures; "
+           "read %.2f s, mapped checks %.2f s\n",
+           entries, mapped, bytes >> 20, bad, t_read, t_map);
     return bad ? 1 : 0;
 }
 
