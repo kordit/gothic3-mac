@@ -340,16 +340,7 @@ constexpr uint32_t kFreePageShift = 12, kFreePages = 1u << (32 - kFreePageShift)
 bool g_check_fit = false;      // heap_check_fit
 uint64_t g_fit_mismatches = 0;
 uint32_t *g_fmax = nullptr; // [2 * kFreePages]: node i covers its children 2i, 2i+1; leaves from kFreePages
-void free_page_update(uint32_t addr) {
-    if (!g_fmax)
-        return;
-    const uint32_t page = addr >> kFreePageShift, lo = page << kFreePageShift;
-    uint32_t best = 0;
-    for (auto fi = g_free->lower_bound(lo); fi != g_free->end() && (*fi >> kFreePageShift) == page; ++fi) {
-        auto it = g_blocks->find(*fi);
-        if (it != g_blocks->end() && !it->second.used && it->second.size > best)
-            best = it->second.size;
-    }
+void free_page_set(uint32_t page, uint32_t best) {
     uint32_t i = kFreePages + page;
     if (g_fmax[i] == best)
         return;
@@ -360,6 +351,26 @@ void free_page_update(uint32_t addr) {
             break;
         g_fmax[i] = m;
     }
+}
+// A free block of `size` bytes starts at `addr` (new or grown): its page's largest can only rise.
+void free_page_grew(uint32_t addr, uint32_t size) {
+    if (g_fmax && size > g_fmax[kFreePages + (addr >> kFreePageShift)])
+        free_page_set(addr >> kFreePageShift, size);
+}
+// The free block of `size` bytes at `addr` is gone or no longer free: only when it was its page's largest is the
+// page looked at again (session 27: looking at it on every change was 207 ms of a player's game).
+void free_page_lost(uint32_t addr, uint32_t size) {
+    const uint32_t page = addr >> kFreePageShift;
+    if (!g_fmax || size < g_fmax[kFreePages + page])
+        return;
+    uint32_t best = 0;
+    for (auto fi = g_free->lower_bound(page << kFreePageShift);
+         fi != g_free->end() && (*fi >> kFreePageShift) == page; ++fi) {
+        auto it = g_blocks->find(*fi);
+        if (it != g_blocks->end() && !it->second.used && it->second.size > best)
+            best = it->second.size;
+    }
+    free_page_set(page, best);
 }
 // The first page at or above `page` that has a free block of at least `need` bytes starting in it, or kFreePages.
 uint32_t free_page_find(uint32_t page, uint32_t need) {
@@ -401,19 +412,27 @@ inline bool size_is_sane(uint32_t size) {
 
 // Records a block, keeping the free index in step.
 void put_block(uint32_t addr, uint32_t size, uint32_t req, bool used) {
-    (*g_blocks)[addr] = Blk{size, req, used};
+    Blk &b = (*g_blocks)[addr];
+    const bool was_free = b.size && !b.used;
+    const uint32_t was = b.size;
+    b = Blk{size, req, used};
     if (used)
         g_free->erase(addr);
     else
         g_free->insert(addr);
-    free_page_update(addr);
+    if (was_free && (used || size < was))
+        free_page_lost(addr, was);
+    if (!used)
+        free_page_grew(addr, size);
 }
 
 void drop_block(std::map<uint32_t, Blk>::iterator it) {
-    const uint32_t addr = it->first;
+    const uint32_t addr = it->first, size = it->second.size;
+    const bool was_free = !it->second.used;
     g_free->erase(addr);
     g_blocks->erase(it);
-    free_page_update(addr);
+    if (was_free)
+        free_page_lost(addr, size);
 }
 
 // The kit span (NFSMW issue 8, 3.0.4): the top 32 MB of the extra heap span hold the kit's own objects - DirectSound
@@ -738,7 +757,7 @@ bool heap_free(uint32_t addr) {
     if (quarantine)
         return true;
     g_free->insert(addr);
-    free_page_update(addr);
+    free_page_grew(addr, it->second.size);
 
     // Coalesce with the following block.
     auto next = std::next(it);
@@ -756,7 +775,7 @@ bool heap_free(uint32_t addr) {
             it = prev;
         }
     }
-    free_page_update(it->first);
+    free_page_grew(it->first, it->second.size);
     return true;
 }
 
@@ -1088,12 +1107,18 @@ std::string heap_check() {
         return buf;
     }
     if (g_fmax) {
-        std::vector<uint32_t> page_max;
+        // each page's leaf is exactly its largest free block (too high would only make searches look in vain)
+        std::map<uint32_t, uint32_t> page_max;
         for (uint32_t a : *g_free) {
-            const uint32_t page = a >> kFreePageShift, size = g_blocks->find(a)->second.size;
-            if (g_fmax[kFreePages + page] < size) {
-                snprintf(buf, sizeof buf, "page index holds %u for page %05x, its free block %08x has %u",
-                         g_fmax[kFreePages + page], page, a, size);
+            uint32_t &m = page_max[a >> kFreePageShift];
+            m = std::max(m, g_blocks->find(a)->second.size);
+        }
+        for (uint32_t page = 0; page < kFreePages; ++page) {
+            const auto it = page_max.find(page);
+            const uint32_t want = it == page_max.end() ? 0u : it->second;
+            if (g_fmax[kFreePages + page] != want) {
+                snprintf(buf, sizeof buf, "page index holds %u for page %05x, its largest free block has %u",
+                         g_fmax[kFreePages + page], page, want);
                 return buf;
             }
         }
