@@ -175,12 +175,57 @@ def fmt_bytes(n):
 IMAGES = None
 
 
+def load_pages(path):
+    """<trace>.pages: {label: {page address: bytes}} (kit/runtime/memtrace.cpp)."""
+    import os
+    import struct
+    out = collections.defaultdict(dict)
+    if not os.path.exists(path):
+        return out
+    with open(path, "rb") as f:
+        while True:
+            head = f.read(4)
+            if len(head) < 4:
+                break
+            (n,) = struct.unpack("<I", head)
+            label = f.read(n).decode()
+            (at,) = struct.unpack("<I", f.read(4))
+            out[label][at] = f.read(PAGE_DEFAULT)
+    return out
+
+
+def vtable_marks(sec):
+    """Per dumped page, the sorted offsets of dwords that are vtables with RTTI, and their classes."""
+    import numpy as np
+    lo = min(b for b, _, _ in IMAGES.pes)
+    hi = max(b + n for b, n, _ in IMAGES.pes)
+    marks = {}
+    for at, data in sec.get("dump", {}).items():
+        words = np.frombuffer(data, dtype="<u4")
+        offs, names = [], []
+        for i in np.nonzero((words >= lo) & (words < hi))[0]:
+            cls = IMAGES.class_of(int(words[i]))
+            if cls:
+                offs.append(int(i) * 4)
+                names.append(cls)
+        marks[at] = (offs, names)
+    return marks
+
+
 def block_class(sec, r):
+    """The object a run is in: the nearest vtable at or before it, in its page or the page before."""
+    if "marks" not in sec:
+        sec["marks"] = vtable_marks(sec)
+    page = sec["page"]
+    for at in (r["page"], r["page"] - page):
+        offs, names = sec["marks"].get(at, ([], []))
+        limit = r["addr"] - at
+        i = bisect.bisect_right(offs, limit) - 1
+        if i >= 0:
+            return names[i]
     if not r["blk"]:
         return "(outside the heap)"
-    vt = sec["vtables"].get(r["blk"][0])
-    cls = IMAGES.class_of(vt) if vt is not None else None
-    return cls or f"(block {r['blk'][1]:#x} B)"
+    return f"(no vtable before it; block {r['blk'][1]:#x} B)"
 
 
 def by_writer(runs, sec, syms, top):
@@ -217,6 +262,9 @@ def main():
     IMAGES = Images()
     syms = Syms(a.syms)
     sections = parse(a.trace)
+    dumps = load_pages(a.trace + ".pages")
+    for sec in sections:
+        sec["dump"] = dumps.get(sec["label"], {})
     by_label = {s["label"]: s for s in sections}
     for s in sections:
         if not s["label"].startswith("render "):
