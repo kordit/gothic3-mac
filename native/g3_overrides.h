@@ -291,10 +291,8 @@ void g3n_1040e430(X86 *c);
 void g3n_10400530(X86 *c);
 #define FN_103afa70 g3n_103afa70 /* Engine eCParticle_PS::DepthSortParticles */
 void g3n_103afa70(X86 *c);
-#define FN_103ffbe0 g3n_103ffbe0 /* Engine eCFrustumDatabase::ExecuteRenderList */
-void g3n_103ffbe0(X86 *c);
-#define FN_1040c140 g3n_1040c140 /* Engine eCRenderOp2::Render */
-void g3n_1040c140(X86 *c);
+#define FN_104035c0 g3n_104035c0 /* Engine eCFrustumElementItem::Request */
+void g3n_104035c0(X86 *c);
 #define FN_10468f60 g3n_10468f60 /* Engine eCSpeedTreeAdmin::OnBeginRenderSolid */
 void g3n_10468f60(X86 *c);
 

@@ -20,8 +20,7 @@ uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) __asm_
 void fn_1040e430(X86 *c); /* Engine eCRenderSystemAdmin::Render */
 void fn_10400530(X86 *c); /* Engine eCFrustumDatabase::Execute */
 void fn_103afa70(X86 *c); /* Engine eCParticle_PS::DepthSortParticles */
-void fn_103ffbe0(X86 *c); /* Engine eCFrustumDatabase::ExecuteRenderList */
-void fn_1040c140(X86 *c); /* Engine eCRenderOp2::Render */
+void fn_104035c0(X86 *c); /* Engine eCFrustumElementItem::Request */
 void fn_10468f60(X86 *c); /* Engine eCSpeedTreeAdmin::OnBeginRenderSolid */
 
 void g3n_1040e430(X86 *c) {
@@ -33,8 +32,9 @@ void g3n_1040e430(X86 *c) {
  * UpdateVertices 103b3630 (from RenderVertices 103b4c80, from the virtual OnRenderAlpha 103aee30 of an alpha render
  * op) sorts an emitter's particle array in place, back to front from the camera, once a frame (its +0x348 against
  * the world's frame number), before it writes the vertices. The array is the logic's own (EmitParticles, Spawn,
- * TickParticles walk it in that order). Moved: before the alpha list is drawn, each emitter an op of it will draw is
- * sorted, by the same code with the same camera, and the sort in UpdateVertices finds it done.
+ * TickParticles walk it in that order). Moved: right after the gathering (below), each emitter an op of the two
+ * alpha lists will draw is sorted, by the same code with the same camera, and the sort in UpdateVertices finds it
+ * done.
  *
  * An instanced emitter (+0x22d set) draws through its master: that one is sorted when it exists already (sn_master);
  * a master GetMasterInstance 103c0cb0 has yet to make (an entity cloned in the render, itself a write to the logic's
@@ -45,7 +45,7 @@ void g3n_1040e430(X86 *c) {
 #define SN_PARTICLE_VFT 0x106bdcbcu /* eCParticle_PS's vtable (RTTI: COL 107021b8, stage/Engine.dll) */
 #define SN_DEPTHSORT 0x103afa70u
 
-static uint32_t sn_sorted[4096], sn_nsorted; /* emitters sorted after this Execute's alpha list was */
+static uint32_t sn_sorted[4096], sn_nsorted; /* emitters sorted after this Execute's gathering */
 uint64_t g3_snap_particles_moved, g3_snap_particles_left; /* sorts moved; sorts still made in the drawing */
 static int sn_presorting;
 
@@ -56,17 +56,35 @@ static int sn_presorted(uint32_t ps) {
     return 0;
 }
 
-/* The alpha list (eCFrustumDatabase +0x13c, eCRenderOp2 records of 0x18 bytes) is drawn by ExecuteRenderList 103ffbe0
- * (10400530.c:1061), sorted first only while the database's +0x193 is set (:1058); its ops are made inside Execute,
- * so the list exists only from there. An op's +0 is its render context; a legacy one (eCRenderContextLegacy::Render
- * 1040d8b0) calls its object's (ctx +0x10) OnRenderAlpha, slot +0x100, when the op's +4 is 1. For an emitter of its
- * own that is OnRenderAlpha 103aee30 -> RenderVertices -> UpdateVertices(this). So the sorts are made at the entry of
- * ExecuteRenderList for that list, in the list's order, which is the order the drawing would make them in. */
+/* The gathering is the loop at the head of Execute 10400530 (10400720..1040073d) that asks every element of the
+ * database for its render ops: eCFrustumElementItem::Request 104035c0 (db, flags, db + 0x124), which calls each render
+ * context's fill functions, +0x7c into the solid lists (+0x148, +0x160), +0x80 into the alpha lists (+0x13c, +0x16c),
+ * +0x84 into +0x184, and draws nothing. Before it Execute only sets up the device (render target, viewport, clear,
+ * fog, BeginScene); after it, it draws. With the group on, the loop is made here, before Execute, with the flags
+ * Execute would pass; the particles drawn by the two alpha lists are sorted right after it; and Request returns at
+ * once when Execute makes the loop itself. That is the boundary step 6 cuts at: everything up to here can end the
+ * logic's iteration.
+ *
+ * Execute's flags (10400530.c:192-210): 2, or 6 with +0x193; |0x10 with +0x1bd; |0x20 with +0x1c6 while the device
+ * draws to the application's own target (+0xb88 set and GetRenderTarget giving +0xb94); |1 with +0x1c4; |0x40 with
+ * +0x1ae; |0x80 with +0x1cc. The device's target is what eCGfxMixerAdmin::GetRenderTarget 102eb350 asks the API
+ * device (gfx admin +0x5b8, +0xc) for, which for eCDX9Device (vtable +0x21c = 10307b30) is its +0x24; under any other
+ * device the database is left to Execute as it is (g3_snap_gather_left counts them). An op's +0 is its render context; a legacy one
+ * (eCRenderContextLegacy::Render 1040d8b0) calls its object's (ctx +0x10) OnRenderAlpha, slot +0x100, when the op's +4
+ * is 1. For an emitter that is OnRenderAlpha 103aee30 -> RenderVertices -> UpdateVertices(this or its master). */
+#define SN_APP 0x10862a88u /* eCApplication::ms_pApplication */
+#define SN_REQUEST 0x104035c0u
+#define SN_GFX 0x10874bc0u     /* FUN_10277b80's cached eCGfxAdmin, valid once 10874bc4 bit 0 is set */
+#define SN_GFX_SET 0x10874bc4u
+#define SN_DX9_GET_RENDER_TARGET 0x10307b30u /* eCDX9Device::GetRenderTarget: [this+0x24], [this+0x28] */
 #define SN_LEGACY_VFT 0x106bdb54u /* eCRenderContextLegacy's vtable (RTTI) */
 
+uint64_t g3_snap_gathered, g3_snap_gather_left; /* Executes gathered here; left to Execute */
+static uint32_t sn_gathered_db; /* the database whose Request loop is done, while its Execute runs */
+
 /* An instance's master as eCParticleModule::GetMasterInstance 103c0cb0 finds it, without making one: the key is the
- * instance's entity's creator (vtable +0x6c GetAnimationRenderHook-shaped getter = [ps+0xc], then GetCreator 10488a80
- * = [entity+0x1b4]), looked up by FUN_103c1ab0 in the module's map at +0x20 (buckets) / +0x24 (count): bucket
+ * instance's entity's creator (the particle system's vtable +0x6c getter = [ps+0xc], then GetCreator 10488a80 =
+ * [entity+0x1b4]), looked up by FUN_103c1ab0 in the module's map at +0x20 (buckets) / +0x24 (count): bucket
  * (key >> 4) % count, nodes {key, master, ..., next at +0x14}. 0 when there is none yet: the drawing makes it then. */
 #define SN_PARTICLE_MODULE 0x10878c20u /* FUN_103b9210's cached eCParticleModule, valid once 10878c24 bit 0 is set */
 #define SN_PARTICLE_MODULE_SET 0x10878c24u
@@ -87,10 +105,7 @@ static uint32_t sn_master(uint32_t ps) {
 }
 
 static void sn_presort_particles(X86 *c, uint32_t base, uint32_t num) {
-    uint32_t r[8];
-    for (int i = 0; i < 8; ++i)
-        r[i] = c->r[i];
-    const uint32_t eip = c->eip, frame = rd32(rd32(SN_WORLD) + 0x5e8u);
+    const uint32_t frame = rd32(rd32(SN_WORLD) + 0x5e8u);
     for (uint32_t i = 0; i < num && sn_nsorted < sizeof sn_sorted / sizeof sn_sorted[0]; ++i) {
         const uint32_t op = base + i * 0x18u, ctx = rd32(op);
         if (!ctx || rd32(ctx) != SN_LEGACY_VFT || rd32(op + 4u) != 1u || (rd8(op + 0x10u) & 1u))
@@ -116,37 +131,90 @@ static void sn_presort_particles(X86 *c, uint32_t base, uint32_t num) {
         sn_sorted[sn_nsorted++] = target;
         ++g3_snap_particles_moved;
     }
-    for (int i = 0; i < 8; ++i)
-        c->r[i] = r[i];
-    c->eip = eip;
 }
 
-/* The second alpha list (+0x184), which Execute draws with its own loop of eCRenderOp2::Render 1040c140 right before
- * the first (10400530.c:999-1006, while the database's +0x1c6 and its render target are set): its sorts are made
- * when that loop reaches its first op. */
-void g3n_1040c140(X86 *c) {
-    /* thiscall: ECX the op, [ESP+4] the database, [ESP+8] the alpha flag */
-    const uint32_t op = c->r[1], db = rd32(c->r[4] + 4u);
-    if (G3OPT(SNAP) && db && op == rd32(db + 0x184u) && rd32(db + 0x188u) != 0u)
-        sn_presort_particles(c, op, rd32(db + 0x188u));
-    fn_1040c140(c);
+/* Execute's Request loop and the particles' sorts, before Execute; 0 when the database is left to Execute. */
+static int sn_gather(X86 *c, uint32_t db) {
+    if (rd32(db + 0x134u) == 0u)
+        return 0; /* Execute returns at once */
+    const uint32_t app = rd32(SN_APP);
+    int own_target = 0; /* Execute's bVar1: the device draws to the application's own target */
+    if (rd32(app + 0xb88u) != 0u) {
+        if (!(rd32(SN_GFX_SET) & 1u) || !rd32(SN_GFX))
+            return 0;
+        const uint32_t device = rd32(rd32(SN_GFX) + 0x5b8u + 0xcu);
+        if (!device || rd32(rd32(device) + 0x21cu) != SN_DX9_GET_RENDER_TARGET)
+            return 0;
+        own_target = rd32(device + 0x24u) == rd32(app + 0xb94u);
+    }
+    uint32_t flags = rd8(db + 0x193u) == 1u ? 6u : 2u;
+    if (rd8(db + 0x1c6u) == 1u && own_target)
+        flags |= 0x20u;
+    if (rd8(db + 0x1bdu) == 1u)
+        flags |= 0x10u;
+    if (rd8(db + 0x1c4u) == 1u)
+        flags |= 1u;
+    if (rd8(db + 0x1aeu) == 1u)
+        flags |= 0x40u;
+    if (rd8(db + 0x1ccu) == 1u)
+        flags |= 0x80u;
+    const uint32_t n = rd32(db + 0x20u), items = rd32(db + 0x1cu);
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t args[3] = {db, flags, db + 0x124u};
+        c->r[1] = rd32(items + i * 4u);
+        guest_call(c, SN_REQUEST, args, 3);
+    }
+    const uint32_t lists[2] = {0x13cu, 0x184u};
+    for (int k = 0; k < 2; ++k)
+        sn_presort_particles(c, rd32(db + lists[k]), rd32(db + lists[k] + 4u));
+    return 1;
 }
 
-void g3n_103ffbe0(X86 *c) {
-    /* thiscall: ECX the database, [ESP+4] the list, [ESP+8] the alpha flag */
-    const uint32_t db = c->r[1], list = rd32(c->r[4] + 4u);
-    if (G3OPT(SNAP) && list == db + 0x13cu)
-        sn_presort_particles(c, rd32(list), rd32(list + 4u));
-    fn_103ffbe0(c);
+void g3n_104035c0(X86 *c) {
+    if (sn_gathered_db && rd32(c->r[4] + 4u) == sn_gathered_db) {
+        c->r[0] = 1u;
+        c->eip = rd32(c->r[4]); /* RET 0xc */
+        c->r[4] += 4u + 0xcu;
+        recomp_return(c);
+        return;
+    }
+    fn_104035c0(c);
 }
 
 void g3n_10400530(X86 *c) {
-    sn_nsorted = 0;
+    /* An Execute made inside another (a module's render callback drawing a second database) keeps the outer one's
+     * sorted emitters: clearing them made the outer drawing sort its particles a second time, and qsort put equal
+     * depths in another order. */
+    const uint32_t nsorted = sn_nsorted;
+    static int depth;
+    static uint32_t nested;
+    if (depth++ && ++nested == 1)
+        fprintf(stderr, "g3: snap: an Execute inside another\n");
+    const uint32_t db = c->r[1], outer = sn_gathered_db;
+    sn_gathered_db = 0;
+    if (G3OPT(SNAP)) {
+        uint32_t r[8];
+        for (int i = 0; i < 8; ++i)
+            r[i] = c->r[i];
+        const uint32_t eip = c->eip;
+        if (sn_gather(c, db)) {
+            sn_gathered_db = db;
+            ++g3_snap_gathered;
+        } else {
+            ++g3_snap_gather_left;
+        }
+        for (int i = 0; i < 8; ++i)
+            c->r[i] = r[i];
+        c->eip = eip;
+    }
     fn_10400530(c);
-    sn_nsorted = 0;
+    --depth;
+    sn_gathered_db = outer;
+    sn_nsorted = depth ? nsorted : 0;
     static uint32_t calls;
     if (G3OPT(SNAP) && ++calls % 1200 == 0)
-        fprintf(stderr, "g3: snap: particle sorts moved %llu, left in the drawing %llu\n",
+        fprintf(stderr, "g3: snap: gathered before Execute %llu, left to it %llu; particle sorts moved %llu, left in the "
+                "drawing %llu\n", (unsigned long long)g3_snap_gathered, (unsigned long long)g3_snap_gather_left,
                 (unsigned long long)g3_snap_particles_moved, (unsigned long long)g3_snap_particles_left);
 }
 
