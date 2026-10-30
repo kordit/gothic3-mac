@@ -3028,6 +3028,50 @@ bool sched_pinned_deadline_ahead_locked() {
     return false;
 }
 
+// RECOMP_PINNED_ADVANCE_TRACE=<n> (diagnostics): the first n times the scheduler moves a pinned clock because every
+// guest thread waits, each thread's wait (kind, timeout, guest return address) at that moment, so two runs whose
+// clocks part there show which wait differs.
+void pinned_advance_trace_locked(size_t me) {
+    static const uint32_t limit = [] {
+        const char *v = recomp_env("PINNED_ADVANCE_TRACE");
+        return v ? (uint32_t)strtoul(v, nullptr, 10) : 0u;
+    }();
+    static uint32_t n = 0;
+    if (n >= limit)
+        return;
+    ++n;
+    fprintf(stderr, "[sched] pinned clock %u moved by a wait (thread %zu):", host_pinned_clock_value(), me);
+    for (const GuestThread *t : threads()) {
+        if (t->finished || !t->blocked)
+            continue;
+        const X86 *x = t->is_main ? loader_context() : &t->ctx;
+        const uint32_t esp = x ? x->r[R_ESP] : 0;
+        fprintf(stderr, " [%u %s%s%s ret %08x]", t->id, wait_kind_name(t->wait_kind),
+                t->has_deadline ? " timed" : "", t->wait_kind == W_NONE && t->has_deadline ? " sleep" : "",
+                esp ? rd32(esp) : 0);
+    }
+    fputc('\n', stderr);
+}
+
+int g_pinned_uncounted = 0; // recomp_pinned_uncounted, below sched_checkpoint
+
+// The same trace, for each time the run thread blocks inside its uncounted stretch (the drawing): where the baton
+// goes to the other threads in the middle of the render.
+void pinned_block_trace_locked(const GuestThread *me, const char *why) {
+    static const uint32_t limit = [] {
+        const char *v = recomp_env("PINNED_ADVANCE_TRACE");
+        return v ? (uint32_t)strtoul(v, nullptr, 10) : 0u;
+    }();
+    static uint32_t n = 0;
+    if (n >= limit)
+        return;
+    ++n;
+    const X86 *x = loader_context();
+    const uint32_t esp = x ? x->r[R_ESP] : 0;
+    fprintf(stderr, "[sched] pinned clock %u: the run thread blocks in its drawing (%s, ret %08x, cs %08x)\n",
+            host_pinned_clock_value(), why, esp ? rd32(esp) : 0, me->wait_kind == W_CRITSEC ? me->wait_cs : 0);
+}
+
 // T01 evidence: where the MAIN guest thread's wall time goes while it does not
 // hold the baton. yield = runnable but another guest thread held the baton
 // (the bounded checkpoint yield); blocked = its own sleep or wait, until the
@@ -3168,6 +3212,7 @@ void sched_run_others_locked(size_t me, const char *why) {
             // Every guest thread is blocked and one of them, or a timer one waits on, has a timeout on the guest's
             // clock: that clock moves to it, a frame's step at a time, rather than this thread sleeping on the
             // machine's (sched_deadline_now).
+            pinned_advance_trace_locked(me);
             host_pinned_clock_advance();
             continue;
         }
@@ -3235,6 +3280,8 @@ uint32_t guest_block(const char *why) {
     }
     me->last_yield = sched_now();
     const double block_start = me->last_yield;
+    if (me->is_main && g_pinned_uncounted > 0)
+        pinned_block_trace_locked(me, why);
     const bool plain_sleep = me->wait_kind == W_NONE && me->has_deadline;
     const double sleep_until = me->deadline;
     me->runnable_at = 0.0;
@@ -3521,6 +3568,19 @@ void sched_atomic_unwind_to_esp(uint32_t esp) {
         --t_atomic;
 }
 
+// A stretch of the run thread whose length must not change what the guest sees in a pinned run: its calls do not
+// count toward the scheduler's pinned slice (sched_checkpoint) and its clock polls not toward the stall breaker
+// (kit/host/boot.cpp). Marked by the game's own code around its drawing (Gothic 3: native/phases.c, DoRender), so a
+// render that makes more or fewer calls (the snap group gathers the far view once more) neither moves the guest's
+// clock nor where FMOD's and PhysX's threads get the baton: in walka they got it a frame apart and the logic parted
+// (frame 4803). Only the run thread marks it, and only the run thread's counting stops.
+extern "C" void recomp_pinned_uncounted(int on) {
+    g_pinned_uncounted += on ? 1 : -1;
+}
+extern "C" int recomp_pinned_uncounted_now(void) {
+    return g_pinned_uncounted > 0 && recomp_cur_is_main_thread();
+}
+
 void sched_checkpoint() {
     // Drain first and unconditionally: a guest with no worker threads never
     // reaches the scheduler proper, and a signal it never applied is a wait
@@ -3541,6 +3601,8 @@ void sched_checkpoint() {
         if (threads().size() < 2 || t_atomic)
             return;
         GuestThread *me = threads()[t_self];
+        if (me->is_main && g_pinned_uncounted > 0)
+            return;
         if (++me->pinned_calls < kPinnedSliceCalls)
             return;
         me->pinned_calls = 0;

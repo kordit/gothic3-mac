@@ -113,10 +113,13 @@ double now_seconds() {
 // published through it and a count a step behind breaks the stall a poll later.
 std::atomic<uint32_t> g_polls_since_frame{0};
 uint32_t g_clock_stalls = 0;
-// A frame of this game asks a few dozen times. Two hundred and fifty-six is
-// far enough above that to be unreachable by drawing and near enough to be
-// reached quickly by spinning.
-const uint32_t kStallPolls = 256;
+// It was 256, on the belief that a frame asks a few dozen times. Gothic 3's frames ask 576-3420 times
+// (RECOMP_CLOCK_POLL_TRACE, walka after the new game's loading: bCTimer::GetTimeStamp 1002bcf0 reads QPC and
+// GetTickCount 400-550 times a frame), so the breaker stepped the clock 3-14 times in every frame, and the game's time
+// followed how often the render asked: the snap group, which gathers the far view once more, parted from the
+// reference at the end of the loading (walka, frame 4679). 65536 is twenty times the most a measured frame asked; a
+// spinning guest still reaches it in milliseconds.
+const uint32_t kStallPolls = 65536;
 
 void arm_clock_pin() {
     const char *spec = recomp_env("PIN_CLOCK");
@@ -733,11 +736,18 @@ void boot_clock_advance() {
     host_pinned_clock_advance();
 }
 
+// Polls inside a stretch the game marks (recomp_pinned_uncounted, kit/runtime/kernel32.cpp) do not count toward the
+// stall breaker. Gothic 3 marks its drawing (native/phases.c, DoRender): a frame that loads its resources in the
+// render polls the clock hundreds of thousands of times, so the clock stepped by how often the render asked, and a
+// render that gathers in another order (the snap group) gave the logic another time (walka, frame 4801, 4 steps).
+// The drawing never waits on the clock, so nothing there needs the breaker.
+extern "C" int recomp_pinned_uncounted_now(void);
+
 void boot_clock_poll() {
     // Only the run thread's polls count. A free thread (Gothic 3: fmodex's mixer, off the baton) polls on the
     // machine's schedule, so counting it moved the clock at another point in every run: two pinned runs of one
     // script seeded bCRandom from different timeGetTime values during the boot and parted at the sixth frame.
-    if (!host_time_source_is_pinned() || !boot_on_run_thread())
+    if (!host_time_source_is_pinned() || !boot_on_run_thread() || recomp_pinned_uncounted_now())
         return;
     if (poll_trace())
         poll_trace_note();
