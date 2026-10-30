@@ -5179,14 +5179,23 @@ void Query_GetData(X86 *c) {
             // traversal steps (Engine 103fe9df) and every free handle before it reuses one (104041e0);
             // each of those polls was a render-thread sync, and one on a query of this frame a commit
             // that split the render pass. It waits with FLUSH once it has nothing else to do (103feb5b).
+            // Gothic 3 D-054 step 2: while frames are hashed (RECOMP_D3D9_FRAME_HASH) every ended query waits for its
+            // count, so the answer is the same in every run instead of depending on how far the GPU got (two pinned
+            // runs parted on single frames of the sky, the sun's query answered in one and not yet in the other).
+            static const bool exact = recomp_env("D3D9_FRAME_HASH") != nullptr;
             QueryState &st = it->second;
             const bool flush = (flags & 1) != 0;
             int r;
             if (st.counted && g_query_keep)
                 r = 1, count = st.count;
-            else if (st.phase != 2 || (!wait && st.present == g_presents))
+            else if (st.phase != 2 || (!wait && !exact && st.present == g_presents))
                 r = 0;
-            else {
+            else if (exact) {
+                PhaseWait phase("query wait");
+                do // sent to the GPU on the first call; 0 until its frame has finished there
+                    r = host_d9_query_result(q->id, &count, 1);
+                while (r == 0);
+            } else {
                 static const char *nosync_text = recomp_env("D3D9_QUERY_NOSYNC");
 #ifndef RECOMP_D3D9_QUERY_NOSYNC_DEFAULT
 #define RECOMP_D3D9_QUERY_NOSYNC_DEFAULT 0   // game_config.h from before game.toml [game] query_nosync

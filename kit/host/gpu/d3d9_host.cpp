@@ -1055,7 +1055,7 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
 // RECOMP_D3D9_FRAME_HASH=<file>: every presented frame is read back whole and hashed, a line a frame ("<present>
 // <w>x<h> <hash>"), so two runs of one script can be compared frame by frame (Gothic 3 D-054 step 2: the reference a
 // change that must not change the picture is held to). Presents go synchronously while it is on, so the frame read
-// is the one just presented.
+// is the one just presented. After the hash, the 8x8 grid's tile hashes.
 static FILE *frame_hash_file() {
     static FILE *f = [] {
         const char *path = recomp_env("D3D9_FRAME_HASH");
@@ -1097,7 +1097,21 @@ static void frame_hash_write(FILE *f) {
             }
         }
     }
-    fprintf(f, "%llu %ux%u %016llx\n", (unsigned long long)presents, w, h, (unsigned long long)hash);
+    // And a 16-bit hash of each tile of an 8x8 grid, so a difference between two runs shows where it is.
+    char tiles[8 * 8 * 4 + 1] = "";
+    if (!rgb.empty() && w >= 8 && h >= 8) {
+        for (uint32_t ty = 0; ty < 8; ++ty)
+            for (uint32_t tx = 0; tx < 8; ++tx) {
+                uint32_t th = 2166136261u;
+                for (uint32_t y = ty * h / 8; y < (ty + 1) * h / 8; ++y) {
+                    const uint8_t *row = rgb.data() + ((size_t)y * w + tx * w / 8) * 3;
+                    for (uint32_t x = 0; x < ((tx + 1) * w / 8 - tx * w / 8) * 3; ++x)
+                        th = (th ^ row[x]) * 16777619u;
+                }
+                snprintf(tiles + (ty * 8 + tx) * 4, 5, "%04x", (th ^ (th >> 16)) & 0xffff);
+            }
+    }
+    fprintf(f, "%llu %ux%u %016llx %s\n", (unsigned long long)presents, w, h, (unsigned long long)hash, tiles);
     if (presents % 60 == 0)
         fflush(f);
 }
