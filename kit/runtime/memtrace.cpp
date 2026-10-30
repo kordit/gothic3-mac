@@ -23,6 +23,13 @@
 #include <sys/ucontext.h>
 #endif
 
+// The read watch: set while a section only watches reads (RECOMP_MEMTRACE_WATCH), read by every load of a build made
+// with RECOMP_READ_WATCH (x86.h). Defined in every build, so either links.
+extern "C" {
+volatile int g_read_watch_on = 0;
+void recomp_read_watch(uint32_t addr, uint32_t n);
+}
+
 namespace {
 #if defined(__APPLE__) && defined(__aarch64__)
 constexpr int kFrames = 10;          // host return addresses kept per touch, after pc and lr
@@ -180,6 +187,101 @@ void print_block(FILE *f, uint32_t a) {
 #endif
 } // namespace
 
+// ---- the read watch ---------------------------------------------------------------------------------------------
+// With RECOMP_MEMTRACE_WATCH=1, the end of a section labelled "render ..." keeps the bytes it changed as a bitmap per
+// page, and the next section begun (the next logic) protects nothing: it only sets g_read_watch_on, and every load of
+// a RECOMP_READ_WATCH build that touches a kept byte is counted by the host code address doing it (the generated
+// function) and the guest address. Its end appends "watch <label>" and one "H <pc> <addr> <len> <count> <thread>"
+// line per place to the report: the render's writes the next logic really reads, to the byte.
+#if defined(__APPLE__) && defined(__aarch64__)
+namespace {
+constexpr uint32_t kWatchPages = 8192;  // pages with kept bytes (16 KB each: 128 MB of guest memory)
+constexpr uint32_t kWatchHits = 1 << 16;
+struct WatchHit {
+    uint64_t pc;
+    uint32_t addr, len, count, other;
+};
+uint16_t *g_wslot = nullptr;   // [guest pages]: 1 + index into g_wbits, 0 when the page keeps nothing
+uint8_t *g_wbits = nullptr;    // [kWatchPages][page / 8]
+uint32_t g_wnpages = 0, g_wdropped = 0;
+WatchHit *g_whits = nullptr;
+uint32_t g_wnhits = 0;
+bool g_wsection = false, g_warmed = false;
+std::atomic_flag g_wlock = ATOMIC_FLAG_INIT;
+
+bool watch_wanted() {
+    static const bool on = [] {
+        const char *v = recomp_env("MEMTRACE_WATCH");
+        return v && *v && *v != '0';
+    }();
+    return on;
+}
+
+void watch_keep(uint32_t addr, uint32_t len) {
+    for (uint32_t a = addr; a < addr + len; ++a) {
+        const uint32_t page = a / g_page;
+        uint16_t &slot = g_wslot[page];
+        if (!slot) {
+            if (g_wnpages >= kWatchPages) {
+                ++g_wdropped;
+                continue;
+            }
+            slot = (uint16_t)(++g_wnpages);
+            memset(g_wbits + (size_t)(slot - 1) * (g_page / 8), 0, g_page / 8);
+        }
+        const uint32_t o = a % g_page;
+        g_wbits[(size_t)(slot - 1) * (g_page / 8) + o / 8] |= (uint8_t)(1u << (o % 8));
+    }
+}
+
+bool watch_kept(uint32_t a) {
+    const uint32_t page = a / g_page;
+    if (page >= g_pages)
+        return false;
+    const uint16_t slot = g_wslot[page];
+    if (!slot)
+        return false;
+    const uint32_t o = a % g_page;
+    return (g_wbits[(size_t)(slot - 1) * (g_page / 8) + o / 8] >> (o % 8)) & 1u;
+}
+} // namespace
+
+extern "C" __attribute__((noinline)) void recomp_read_watch(uint32_t addr, uint32_t n) {
+    if (!g_wsection || !g_wslot)
+        return;
+    uint32_t hit = 0;
+    for (uint32_t i = 0; i < n && i < 64; ++i)
+        if (watch_kept(addr + i)) {
+            hit = 1;
+            break;
+        }
+    if (!hit)
+        return;
+    const uint64_t pc = (uint64_t)(uintptr_t)__builtin_return_address(0);
+    const uint32_t other = thread_now() != g_self;
+    while (g_wlock.test_and_set(std::memory_order_acquire)) {
+    }
+    uint32_t h = (uint32_t)((pc * 0x9e3779b97f4a7c15ull) >> 40) ^ addr;
+    for (uint32_t k = 0; k < kWatchHits; ++k) {
+        WatchHit &w = g_whits[(h + k) & (kWatchHits - 1)];
+        if (w.count && (w.pc != pc || w.addr != addr))
+            continue;
+        if (!w.count) {
+            if (g_wnhits >= kWatchHits * 3 / 4)
+                break;
+            w = {pc, addr, n, 0, other};
+            ++g_wnhits;
+        }
+        ++w.count;
+        break;
+    }
+    g_wlock.clear(std::memory_order_release);
+}
+#else
+extern "C" void recomp_read_watch(uint32_t, uint32_t) {
+}
+#endif
+
 int memtrace_fault(uint64_t addr, void *uc_) {
 #if defined(__APPLE__) && defined(__aarch64__)
     if (!g_state || !g_mem)
@@ -225,8 +327,18 @@ extern "C" int recomp_memtrace_active(void) {
 
 extern "C" int recomp_memtrace_begin(void) {
 #if defined(__APPLE__) && defined(__aarch64__)
-    if (g_on.load() || !g_mem || !tables())
+    if (g_on.load() || g_wsection || !g_mem || !tables())
         return 0;
+    if (g_warmed) {
+        // the section after a render's: it only watches reads of the bytes the render changed
+        g_warmed = false;
+        g_self = thread_now();
+        g_wnhits = 0;
+        memset(g_whits, 0, sizeof(WatchHit) * kWatchHits);
+        g_wsection = true;
+        g_read_watch_on = 1;
+        return 1;
+    }
     memset(g_state, kNone, g_pages);
     // Sealed read-only pages keep their protection and their own fault handling.
     uint32_t sealed_addr[64], sealed_bytes[64];
@@ -266,8 +378,36 @@ extern "C" void recomp_memtrace_touch(uint32_t addr, uint32_t len, int write) {
 
 extern "C" void recomp_memtrace_end(const char *label, const char *path) {
 #if defined(__APPLE__) && defined(__aarch64__)
+    if (g_wsection) {
+        g_read_watch_on = 0;
+        g_wsection = false;
+        FILE *f = path ? fopen(path, "a") : stderr;
+        if (!f)
+            f = stderr;
+        fprintf(f, "watch %s places=%u kept_pages=%u dropped=%u image=%llx self=%x\n", label ? label : "", g_wnhits,
+                g_wnpages, g_wdropped, (unsigned long long)os_image_load(), g_self);
+        for (uint32_t k = 0; k < kWatchHits; ++k) {
+            const WatchHit &w = g_whits[k];
+            if (w.count)
+                fprintf(f, "H %llx %x %x %u %u\n", (unsigned long long)w.pc, w.addr, w.len, w.count, w.other);
+        }
+        fprintf(f, "end %s\n", label ? label : "");
+        if (f != stderr)
+            fclose(f);
+        return;
+    }
     if (!g_on.load())
         return;
+    const bool keep = watch_wanted() && label && strncmp(label, "render", 6) == 0;
+    if (keep) {
+        if (!g_wslot) {
+            g_wslot = (uint16_t *)calloc(g_pages, sizeof(uint16_t));
+            g_wbits = (uint8_t *)malloc((size_t)kWatchPages * (g_page / 8));
+            g_whits = (WatchHit *)calloc(kWatchHits, sizeof(WatchHit));
+        }
+        memset(g_wslot, 0, sizeof(uint16_t) * g_pages);
+        g_wnpages = g_wdropped = 0;
+    }
     // Written pages are compared while the rest stay protected, so what is written meanwhile is still caught.
     const uint32_t touched = g_ntouched.load();
     struct Run {
@@ -308,6 +448,8 @@ extern "C" void recomp_memtrace_end(const char *label, const char *path) {
             const uint32_t len = e - o - same;
             if (nruns < sizeof runs / sizeof runs[0])
                 runs[nruns++] = {page * g_page + o, len};
+            if (keep && g_wslot)
+                watch_keep(page * g_page + o, len);
             bytes += len;
             o = e;
         }
@@ -350,6 +492,7 @@ extern "C" void recomp_memtrace_end(const char *label, const char *path) {
         fclose(f);
     for (uint32_t i = 0; i < touched; ++i)
         memset(&g_rec[g_touched[i]], 0, sizeof(Rec));
+    g_warmed = keep && g_wslot && g_wbits && g_whits;
 #else
     (void)label;
     (void)path;

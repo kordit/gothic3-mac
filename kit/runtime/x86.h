@@ -124,24 +124,43 @@ extern uint8_t *const g_mem;
  * the accessors below are what call it. */
 void recomp_null_access(uint32_t addr, int write);
 
+/* The read watch (kit/runtime/memtrace.cpp, RECOMP_MEMTRACE_WATCH): a build made with RECOMP_READ_WATCH checks one flag
+ * on every guest load and, while it is set, reports the bytes read, so a trace knows reads to the byte where the page
+ * protection knows them to the page. Never in a player's build: there the check is nothing. */
+#ifdef RECOMP_READ_WATCH
+extern volatile int g_read_watch_on;
+void recomp_read_watch(uint32_t addr, uint32_t n);
+#define RECOMP_READ_SEEN(a, n)                                                                                         \
+    do {                                                                                                               \
+        if (__builtin_expect(g_read_watch_on, 0))                                                                      \
+            recomp_read_watch((a), (n));                                                                               \
+    } while (0)
+#else
+#define RECOMP_READ_SEEN(a, n) ((void)0)
+#endif
+
 /* Little-endian host (ARM64) matches the guest, so memcpy is a plain load. */
 RECOMP_HOT_INLINE uint8_t rd8(uint32_t a) {
     RECOMP_NULL_GUARD(a, 0);
+    RECOMP_READ_SEEN(a, 1);
     return g_mem[a];
 }
 RECOMP_HOT_INLINE uint16_t rd16(uint32_t a) {
     RECOMP_NULL_GUARD(a, 0);
+    RECOMP_READ_SEEN(a, 2);
     uint16_t v;
     memcpy(&v, g_mem + a, 2);
     return v;
 }
 RECOMP_HOT_INLINE uint32_t rd32(uint32_t a) {
     RECOMP_NULL_GUARD(a, 0);
+    RECOMP_READ_SEEN(a, 4);
     uint32_t v;
     memcpy(&v, g_mem + a, 4);
     return v;
 }
 RECOMP_HOT_INLINE uint64_t rd64(uint32_t a) {
+    RECOMP_READ_SEEN(a, 8);
     uint64_t v;
     memcpy(&v, g_mem + a, 8);
     return v;
@@ -249,6 +268,7 @@ RECOMP_HOT_INLINE void wr64(uint32_t a, uint64_t v) {
  * MSVC places the counters and locks these touch on 4-byte boundaries. */
 RECOMP_HOT_INLINE uint32_t lk_add32(uint32_t a, uint32_t d) {
     RECOMP_NULL_GUARD(a, 1);
+    RECOMP_READ_SEEN(a, 4);
     uint32_t old;
     if ((a & 3u) == 0u)
         old = __atomic_fetch_add((uint32_t *)(g_mem + a), d, __ATOMIC_SEQ_CST);
@@ -262,6 +282,7 @@ RECOMP_HOT_INLINE uint32_t lk_add32(uint32_t a, uint32_t d) {
 }
 RECOMP_HOT_INLINE uint32_t lk_or32(uint32_t a, uint32_t m) {
     RECOMP_NULL_GUARD(a, 1);
+    RECOMP_READ_SEEN(a, 4);
     uint32_t old;
     if ((a & 3u) == 0u)
         old = __atomic_fetch_or((uint32_t *)(g_mem + a), m, __ATOMIC_SEQ_CST);
@@ -275,6 +296,7 @@ RECOMP_HOT_INLINE uint32_t lk_or32(uint32_t a, uint32_t m) {
 }
 RECOMP_HOT_INLINE uint32_t lk_and32(uint32_t a, uint32_t m) {
     RECOMP_NULL_GUARD(a, 1);
+    RECOMP_READ_SEEN(a, 4);
     uint32_t old;
     if ((a & 3u) == 0u)
         old = __atomic_fetch_and((uint32_t *)(g_mem + a), m, __ATOMIC_SEQ_CST);
@@ -288,6 +310,7 @@ RECOMP_HOT_INLINE uint32_t lk_and32(uint32_t a, uint32_t m) {
 }
 RECOMP_HOT_INLINE uint32_t lk_xchg32(uint32_t a, uint32_t v) {
     RECOMP_NULL_GUARD(a, 1);
+    RECOMP_READ_SEEN(a, 4);
     uint32_t old;
     if ((a & 3u) == 0u)
         old = __atomic_exchange_n((uint32_t *)(g_mem + a), v, __ATOMIC_SEQ_CST);
@@ -299,11 +322,13 @@ RECOMP_HOT_INLINE uint32_t lk_xchg32(uint32_t a, uint32_t v) {
     return old;
 }
 RECOMP_HOT_INLINE float rdf32(uint32_t a) {
+    RECOMP_READ_SEEN(a, 4);
     float v;
     memcpy(&v, g_mem + a, 4);
     return v;
 }
 RECOMP_HOT_INLINE double rdf64(uint32_t a) {
+    RECOMP_READ_SEEN(a, 8);
     double v;
     memcpy(&v, g_mem + a, 8);
     return v;
@@ -1161,6 +1186,7 @@ static inline int recomp_string_fast(const X86 *c, uint32_t a, uint64_t bytes, u
             recomp_string_fast(c, src_, bytes_, BITS / 8, &s_) &&                                  \
             (c->eflags_df ? (d_ >= s_ || (uint64_t)d_ + bytes_ <= s_)                              \
                           : (d_ <= s_ || (uint64_t)d_ >= (uint64_t)s_ + bytes_))) {                \
+            RECOMP_READ_SEEN(s_, (uint32_t)bytes_);                                                \
             memmove(g_mem + d_, g_mem + s_, (size_t)bytes_);                                       \
             const uint32_t step_ = c->eflags_df ? (uint32_t)-(uint32_t)bytes_ : (uint32_t)bytes_;  \
             c->r[R_ESI] = src_ + step_;                                                            \
