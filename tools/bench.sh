@@ -105,6 +105,8 @@ nm -n "$bin" > "$out/syms.txt"
 
 [ -n "$BENCH_PIN" ] && export RECOMP_PIN_CLOCK="$BENCH_PIN"
 [ -n "$BENCH_HASH" ] && export RECOMP_D3D9_FRAME_HASH="$out/frames.hash"
+# BENCH_HASH_DUMP=<first>-<last>: those frames' pictures beside it too (frames.hash.<n>.ppm).
+[ -n "$BENCH_HASH_DUMP" ] && export RECOMP_D3D9_FRAME_HASH_DUMP="$BENCH_HASH_DUMP"
 # The new game's intro (G3_Intro.bik, about 214 s) skipped; without it a scripted new game sat at 1 draw per frame.
 RECOMP_EXE="$player/game/Gothic3Final.exe" RECOMP_BINK_SKIP=G3_Intro \
   RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
