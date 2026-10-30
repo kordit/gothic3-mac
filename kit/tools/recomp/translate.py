@@ -1666,7 +1666,11 @@ class Image(object):
         mnem = words[-1].upper()
         mnem = self.MNEM_ALIAS.get(mnem, mnem)
         ops = [self._op_text(ci, o, mnem) for o in ci.operands]
-        if (rep and rep != "LOCK") or mnem in Translator.STRING_MNEM:
+        # MOVSD/CMPSD also name SSE instructions. Dropping their XMM operands
+        # turns a scalar transfer into a string operation that mutates ESI/EDI.
+        # Recovery must preserve the distinction just as listing emission does.
+        string_form = mnem in Translator.STRING_MNEM and not any(XMM_RE.match(o) for o in ops)
+        if (rep and rep != "LOCK") or string_form:
             ops = []            # implicit ES:EDI / ESI operands carry nothing
         text = "%08x  %s%s%s" % (ci.address, mnem, "." + rep if rep else "",
                                  (" " + ",".join(ops)) if ops else "")
