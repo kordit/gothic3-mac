@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """tools/frames_diff.py <a/frames.hash> <b/frames.hash> [--tolerance N]: where two runs' pictures part
-(RECOMP_D3D9_FRAME_HASH lines, "<present> <w>x<h> <hash> <8x8 tile hashes> <8x8 tile channel sums>"). Prints how many
+(RECOMP_D3D9_FRAME_HASH lines, "<present> <w>x<h> <hash> <8x8 tile hashes> <8x8 tile channel sums> t=<game clock>").
+Also prints the first frame whose game clock differs. Prints how many
 frames both have, how many agree, the first that differs and the runs of differing frames.
 
 --tolerance N (D-055): a frame whose differing tiles each moved their channel sum by at most N agrees within the
@@ -16,8 +17,9 @@ def load(path):
     for line in open(path):
         parts = line.split()
         if len(parts) >= 3:
-            sums = [int(x, 16) for x in parts[4].split(",")] if len(parts) > 4 else []
-            out.append((parts[1], parts[2], parts[3] if len(parts) > 3 else "", sums))
+            sums = [int(x, 16) for x in parts[4].split(",")] if len(parts) > 4 and "," in parts[4] else []
+            clock = next((int(p[2:]) for p in parts[4:] if p.startswith("t=")), None)
+            out.append((parts[1], parts[2], parts[3] if len(parts) > 3 else "", sums, clock))
     return out
 
 
@@ -46,6 +48,10 @@ def main():
     n = min(len(a), len(b))
     diff = [i for i in range(n) if a[i][:2] != b[i][:2]]
     print(f"frames: {len(a)} and {len(b)}, {n} in common, {n - len(diff)} agree")
+    clock = next((i for i in range(n) if a[i][4] is not None and b[i][4] is not None and a[i][4] != b[i][4]), None)
+    if clock is not None:
+        print(f"game clock parts at frame {clock + 1}: {a[clock][4]} and {b[clock][4]} ms"
+              f" (frame {clock}: {a[clock - 1][4] if clock else '-'} and {b[clock - 1][4] if clock else '-'})")
     within = set()
     if args.tolerance is not None:
         for i in diff:
