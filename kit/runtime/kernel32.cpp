@@ -2,6 +2,7 @@
 #include "seh.h"
 #include "profile.h"
 #include "hostprof.h"
+#include "memtrace.h"
 #include "game_config.h"
 // kernel32.cpp - KERNEL32 shims: heap, files, modules, TLS, sync objects,
 // time and the string/locale helpers the CRT startup calls.
@@ -898,6 +899,7 @@ void k_ReadFile(X86 *c) {
     // archive in 128 KB pieces (64 KB and up here made each texture 10 times slower to come in).
     const int fd = o->fd;
     const bool lend = want >= (1u << 20) && !recomp_cur_is_main_thread() && recomp_host_work_begin();
+    recomp_memtrace_touch(buf, want, 1); // the kernel fails a read into a traced page instead of faulting
     int64_t n = os_fd_read(fd, g_mem + buf, want);
     if (lend)
         recomp_host_work_end();
@@ -940,6 +942,7 @@ void k_WriteFile(X86 *c) {
         set_eax(c, 0);
         return;
     }
+    recomp_memtrace_touch(buf, want, 0);
     int64_t n = os_fd_write(o->fd, g_mem + buf, want);
     if (n < 0) {
         set_last_error(ERROR_ACCESS_DENIED_);
@@ -1392,6 +1395,7 @@ void k_MapViewOfFile(X86 *c) {
         return;
     }
     os_fd_seek(m->fd, off_low, OS_SEEK_SET);
+    recomp_memtrace_touch(addr, n, 1);
     int64_t got = os_fd_read(m->fd, g_mem + addr, n);
     if (got < 0)
         got = 0;

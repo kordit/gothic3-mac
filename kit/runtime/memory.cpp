@@ -1,6 +1,7 @@
 #include "seh.h"
 #define RECOMP_GUEST_MEMORY_OWNER 1 /* defines and maps g_mem */
 #include "memory.h"
+#include "memtrace.h"
 #include "win32.h"
 #include "loader.h"
 
@@ -709,6 +710,22 @@ bool heap_owns(uint32_t addr) {
     return it != g_blocks->end() && it->second.used;
 }
 
+bool heap_block_at(uint32_t addr, uint32_t *base, uint32_t *size, bool *used) {
+    std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
+    if (!g_blocks)
+        return false;
+    auto it = g_blocks->upper_bound(addr);
+    if (it == g_blocks->begin())
+        return false;
+    --it;
+    if (addr - it->first >= it->second.size)
+        return false;
+    *base = it->first;
+    *size = it->second.req;
+    *used = it->second.used;
+    return true;
+}
+
 uint32_t heap_size(uint32_t addr) {
     std::lock_guard<std::recursive_mutex> heap_lock_(g_heap_mutex);
     if (!g_blocks)
@@ -1166,6 +1183,8 @@ std::atomic<uint64_t> g_readonly_last_pc{0};
 std::atomic<uint32_t> g_readonly_same_pc{0};
 
 int readonly_fault(uint64_t addr, void *uc_) {
+    if (memtrace_fault(addr, uc_)) // memtrace.cpp: a traced page's first touch
+        return 1;
 #if defined(__APPLE__) && defined(__aarch64__)
     if (!g_mem)
         return 0;
@@ -1267,6 +1286,18 @@ bool readonly_release(uint32_t addr) {
     return true;
 }
 } // namespace
+
+uint32_t heap_readonly_sealed(uint32_t *addr, uint32_t *bytes, uint32_t cap) {
+    uint32_t n = 0;
+    for (int i = 0; i < kReadonlyPages && n < cap; ++i) {
+        const uint32_t a = g_readonly[i].addr.load();
+        if (a && g_readonly[i].sealed) {
+            addr[n] = a;
+            bytes[n++] = g_readonly[i].bytes;
+        }
+    }
+    return n;
+}
 
 bool heap_readonly_enabled() {
 #if defined(__APPLE__) && defined(__aarch64__)

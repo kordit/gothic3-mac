@@ -41,6 +41,8 @@ extern "C" size_t recomp_heap_defer_flush();
 // the start of a live allocation.
 uint32_t heap_size(uint32_t addr);
 bool heap_owns(uint32_t addr);
+// The heap block holding `addr` (used or free): its start and requested size; false outside every block.
+bool heap_block_at(uint32_t addr, uint32_t *base, uint32_t *size, bool *used);
 
 // Guarded blocks: `guard` bytes of a known fill on each side of the usable
 // span, so a guest write that runs off either end lands in the gap instead of
@@ -73,6 +75,8 @@ bool heap_seal_readonly(uint32_t addr);
 void heap_readonly_report();
 // Writes stopped so far (all pages, since mem_init).
 uint32_t heap_readonly_hits();
+// The sealed read-only spans (guest address, bytes), at most `cap`; returns how many.
+uint32_t heap_readonly_sealed(uint32_t *addr, uint32_t *bytes, uint32_t cap);
 
 struct HeapStats {
     uint32_t used_blocks;

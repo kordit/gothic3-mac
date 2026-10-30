@@ -12,6 +12,7 @@
 #include "../loader.h"
 #include "../discovery.h"
 #include "../memory.h"
+#include "../memtrace.h"
 #include "../win32.h"
 #include "../guest_pause.h"
 #include "../../platform/os.h"
@@ -1425,6 +1426,74 @@ static void test_heap_readonly() {
     heap_free(again);
     check(heap_check().empty(), "the heap is consistent after the read-only checks");
     unsetenv("RECOMP_READONLY_PAGES");
+}
+
+// Gothic 3 D-054: recomp_memtrace_begin/end report which pages guest code read, and the bytes it wrote, from page
+// faults on the protected arena; a syscall into the arena works after recomp_memtrace_touch.
+static void test_memtrace() {
+    section("memtrace");
+#if defined(__APPLE__) && defined(__aarch64__)
+    os_install_fault_handlers(readonly_test_fault);
+    const uint32_t page = (uint32_t)os_vm_page_size();
+    const uint32_t a = heap_alloc(4 * page, true, page), b = heap_alloc(4 * page, true, page),
+                   d = heap_alloc(4 * page, true, page);
+    wr32(a + 0x10, 0x11223344u);
+    char path[] = "/tmp/memtrace_test_XXXXXX";
+    const int tmp = mkstemp(path);
+    close(tmp);
+    unlink(path);
+    check(recomp_memtrace_begin() == 1, "the trace begins");
+    check(recomp_memtrace_begin() == 0, "a second begin while on is refused");
+    const uint32_t seen = rd32(b + 0x100);
+    wr32(a + page + 4, 0xdeadbeefu);
+    g_mem[a + 2 * page + 3] = 0x5a;
+    wr32(a + 0x10, 0x11223344u); // the value already there: not a change
+    volatile uint32_t sink = 0;
+    std::thread other([&] { sink = rd32(b + 3 * page); });
+    other.join();
+    int fds[2];
+    check(pipe(fds) == 0, "a pipe for the syscall check");
+    check(write(fds[1], "pipe", 4) == 4, "the pipe takes four bytes");
+    recomp_memtrace_touch(d + 8, 4, 1);
+    check(os_fd_read(fds[0], g_mem + d + 8, 4) == 4, "a read into a touched page is not refused with EFAULT");
+    close(fds[0]);
+    close(fds[1]);
+    recomp_memtrace_end("test", path);
+    check(!recomp_memtrace_active(), "the trace ends");
+    wr32(b + 0x200, 9);
+    check(seen == 0 && sink == 0 && rd32(b + 0x200) == 9, "the arena reads and writes again after the end");
+    FILE *f = fopen(path, "r");
+    std::string text;
+    char line[1024];
+    while (f && fgets(line, sizeof line, f))
+        text += line;
+    if (f)
+        fclose(f);
+    unlink(path);
+    char want[128];
+    snprintf(want, sizeof want, "\nR %x r t=", b);
+    check(text.find(want) != std::string::npos, "the read page is reported as read");
+    snprintf(want, sizeof want, "  b %x 4 blk=%x+%x\n", a + page + 4, a, 4 * page);
+    check(text.find(want) != std::string::npos, "the written dword is reported to the byte with its block");
+    snprintf(want, sizeof want, "  b %x 1 blk=", a + 2 * page + 3);
+    check(text.find(want) != std::string::npos, "the written byte is reported");
+    snprintf(want, sizeof want, "  b %x ", a + 0x10);
+    check(text.find(want) == std::string::npos, "a store of the same value is not reported");
+    snprintf(want, sizeof want, "\nR %x r t=", b + 3 * page);
+    const size_t at = text.find(want);
+    check(at != std::string::npos && text.substr(at, text.find('\n', at + 1) - at).find("* ") == std::string::npos,
+          "another thread's read is reported without the begin thread's mark");
+    snprintf(want, sizeof want, "  b %x 4 blk=%x+%x\n", d + 8, d, 4 * page);
+    check(text.find(want) != std::string::npos, "the syscall's write is reported");
+    check(text.find("end test bytes_written=9\n") != std::string::npos, "the report ends with the bytes written");
+    heap_free(a);
+    heap_free(b);
+    heap_free(d);
+    check(heap_check().empty(), "the heap is consistent after the trace");
+#else
+    ++g_skips;
+    printf("  [skip] memtrace needs macOS on arm64\n");
+#endif
 }
 
 static void test_heap_shims(X86 *c) {
@@ -7731,6 +7800,7 @@ int main(int argc, char **argv) {
     test_allocator();
     test_heap_guard();
     test_heap_readonly();
+    test_memtrace();
     test_heap_kit_span();
     test_heap_shims(c);
     test_memory_shims_2(c);
