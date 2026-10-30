@@ -23,9 +23,6 @@ void fn_103afa70(X86 *c); /* Engine eCParticle_PS::DepthSortParticles */
 void fn_104035c0(X86 *c); /* Engine eCFrustumElementItem::Request */
 void fn_10468f60(X86 *c); /* Engine eCSpeedTreeAdmin::OnBeginRenderSolid */
 
-void g3n_1040e430(X86 *c) {
-    fn_1040e430(c);
-}
 
 /* ---- particles: DepthSortParticles at the end of the gathering ----------------------------------------------
  *
@@ -181,25 +178,85 @@ void g3n_104035c0(X86 *c) {
     fn_104035c0(c);
 }
 
+/* ---- the far view: its gathering out of the near view's drawing ---------------------------------------------
+ *
+ * The near view's Execute calls eCCameraBase::RenderLowPoly 102bec80 in the middle of its drawing (10400530.c:589,
+ * while the database's +0x1ab is clear and it has a camera, +0x134): the camera's second database (+0xec) gets the
+ * near one's (+0xe8) frustum and the application's settings, the clip planes move out, and eCRenderSystemAdmin::Render
+ * 1040e430 gathers that database and executes it, nested; then the planes come back. With the group on, RenderLowPoly
+ * is called once more right after the near view's gathering in "gather only" mode: its Render runs as it is, but its
+ * Execute only gathers (sn_gather) and returns. When the drawing reaches RenderLowPoly, its Render goes straight to
+ * Execute (as Render does after its gathering: +0x90 = the database), whose Request loop is skipped. */
+#define SN_RENDER_LOW_POLY 0x102bec80u
+
+static int sn_gather_only;       /* inside RenderLowPoly called for its gathering */
+static uint32_t sn_far_db;       /* the far database gathered for this near Execute, drawn later */
+static int sn_far_done;          /* its Execute gathered in gather only mode */
+uint64_t g3_snap_far_gathered;
+
+void g3n_10400530(X86 *c);
+
+static void sn_ret(X86 *c, uint32_t args) {
+    c->eip = rd32(c->r[4]);
+    c->r[4] += 4u + args;
+    recomp_return(c);
+}
+
+void g3n_1040e430(X86 *c) {
+    /* thiscall: ECX the render system admin, [ESP+4] the database */
+    const uint32_t admin = c->r[1], db = rd32(c->r[4] + 4u);
+    if (G3OPT(SNAP) && !sn_gather_only && db && db == sn_far_db) {
+        /* what Render does after its gathering, as a jump: +0x90 = the database, then Execute returns to Render's
+         * caller (Render's RET 4: the return address moves over the argument) */
+        wr32(admin + 0x90u, db);
+        const uint32_t ret = rd32(c->r[4]);
+        c->r[4] += 4u;
+        wr32(c->r[4], ret);
+        c->r[1] = db;
+        g3n_10400530(c);
+        return;
+    }
+    fn_1040e430(c);
+}
+
 void g3n_10400530(X86 *c) {
-    /* An Execute made inside another (a module's render callback drawing a second database) keeps the outer one's
-     * sorted emitters: clearing them made the outer drawing sort its particles a second time, and qsort put equal
-     * depths in another order. */
-    const uint32_t nsorted = sn_nsorted;
     static int depth;
-    static uint32_t nested;
-    if (depth++ && ++nested == 1)
-        fprintf(stderr, "g3: snap: an Execute inside another\n");
     const uint32_t db = c->r[1], outer = sn_gathered_db;
+    if (G3OPT(SNAP) && sn_gather_only) {
+        /* the far view's Execute, gathering only */
+        uint32_t r[8];
+        for (int i = 0; i < 8; ++i)
+            r[i] = c->r[i];
+        sn_far_done = sn_gather(c, db);
+        for (int i = 0; i < 8; ++i)
+            c->r[i] = r[i];
+        sn_ret(c, 0u);
+        return;
+    }
+    ++depth;
     sn_gathered_db = 0;
     if (G3OPT(SNAP)) {
         uint32_t r[8];
         for (int i = 0; i < 8; ++i)
             r[i] = c->r[i];
         const uint32_t eip = c->eip;
-        if (sn_gather(c, db)) {
+        if (db == sn_far_db) {
+            sn_gathered_db = db; /* gathered before the near view drew */
+        } else if (sn_gather(c, db)) {
             sn_gathered_db = db;
             ++g3_snap_gathered;
+            const uint32_t cam = rd32(db + 0x134u);
+            if (depth == 1 && rd8(db + 0x1abu) == 0u && cam && rd32(cam + 0xe8u) == db && rd8(cam + 0xe1u) != 1u) {
+                sn_gather_only = 1;
+                sn_far_done = 0;
+                c->r[1] = cam;
+                guest_call(c, SN_RENDER_LOW_POLY, 0, 0);
+                sn_gather_only = 0;
+                if (sn_far_done) {
+                    sn_far_db = rd32(cam + 0xecu);
+                    ++g3_snap_far_gathered;
+                }
+            }
         } else {
             ++g3_snap_gather_left;
         }
@@ -208,13 +265,16 @@ void g3n_10400530(X86 *c) {
         c->eip = eip;
     }
     fn_10400530(c);
-    --depth;
     sn_gathered_db = outer;
-    sn_nsorted = depth ? nsorted : 0;
+    if (--depth == 0) {
+        sn_nsorted = 0;
+        sn_far_db = 0;
+    }
     static uint32_t calls;
     if (G3OPT(SNAP) && ++calls % 1200 == 0)
-        fprintf(stderr, "g3: snap: gathered before Execute %llu, left to it %llu; particle sorts moved %llu, left in the "
-                "drawing %llu\n", (unsigned long long)g3_snap_gathered, (unsigned long long)g3_snap_gather_left,
+        fprintf(stderr, "g3: snap: gathered before Execute %llu (far view %llu), left to it %llu; particle sorts moved "
+                "%llu, left in the drawing %llu\n", (unsigned long long)g3_snap_gathered,
+                (unsigned long long)g3_snap_far_gathered, (unsigned long long)g3_snap_gather_left,
                 (unsigned long long)g3_snap_particles_moved, (unsigned long long)g3_snap_particles_left);
 }
 
