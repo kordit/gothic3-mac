@@ -1438,6 +1438,7 @@ static void test_memtrace() {
     const uint32_t a = heap_alloc(4 * page, true, page), b = heap_alloc(4 * page, true, page),
                    d = heap_alloc(4 * page, true, page);
     wr32(a + 0x10, 0x11223344u);
+    wr32(d, 0);
     char path[] = "/tmp/memtrace_test_XXXXXX";
     const int tmp = mkstemp(path);
     close(tmp);
@@ -1486,6 +1487,8 @@ static void test_memtrace() {
     snprintf(want, sizeof want, "  b %x 4 blk=%x+%x\n", d + 8, d, 4 * page);
     check(text.find(want) != std::string::npos, "the syscall's write is reported");
     check(text.find("end test bytes_written=9\n") != std::string::npos, "the report ends with the bytes written");
+    snprintf(want, sizeof want, "\nV %x 0\nV %x 0\nend", a, d);
+    check(text.find(want) != std::string::npos, "each written block's first dword is listed once");
     heap_free(a);
     heap_free(b);
     heap_free(d);

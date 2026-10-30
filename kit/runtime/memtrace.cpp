@@ -12,6 +12,9 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <algorithm>
+#include <vector>
+
 #if defined(__APPLE__) && defined(__aarch64__)
 #include <pthread.h>
 #include <signal.h>
@@ -162,11 +165,16 @@ void print_touch(FILE *f, const char *tag, const Touch &t) {
         fprintf(f, "%s%llx", k ? "," : "", (unsigned long long)image_rel(t.frames[k]));
 }
 
+std::vector<uint32_t> g_blocks_seen; // written blocks of the report being made, for their first dwords
+
 void print_block(FILE *f, uint32_t a) {
     uint32_t base, size;
     bool used;
-    if (heap_block_at(a, &base, &size, &used))
+    if (heap_block_at(a, &base, &size, &used)) {
         fprintf(f, " blk=%x+%x%s", base, size, used ? "" : "(free)");
+        if (used)
+            g_blocks_seen.push_back(base);
+    }
 }
 #endif
 } // namespace
@@ -312,6 +320,12 @@ extern "C" void recomp_memtrace_end(const char *label, const char *path) {
         mprotect(page_at(first), (size_t)(last - first) * g_page, PROT_READ | PROT_WRITE);
     });
     g_on.store(false, std::memory_order_release);
+    // Each written block's first dword, read with the arena open again: for an object, its vtable.
+    std::sort(g_blocks_seen.begin(), g_blocks_seen.end());
+    g_blocks_seen.erase(std::unique(g_blocks_seen.begin(), g_blocks_seen.end()), g_blocks_seen.end());
+    for (uint32_t blk : g_blocks_seen)
+        fprintf(f, "V %x %x\n", blk, rd32(blk));
+    g_blocks_seen.clear();
     fprintf(f, "end %s bytes_written=%llu\n", label ? label : "", (unsigned long long)bytes);
     if (f != stderr)
         fclose(f);
