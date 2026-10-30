@@ -1959,8 +1959,10 @@ void k_InitializeCriticalSection(X86 *c) {
     }
     set_eax(c, 0);
 }
+static void cs_trace(X86 *c, uint32_t cs); // below cur_thread
 void k_EnterCriticalSection(X86 *c) {
     imports_call_leaves_surfaces();
+    cs_trace(c, arg(c, 0));
     sched_enter_critsec(arg(c, 0));
     set_eax(c, 0);
 }
@@ -2263,6 +2265,23 @@ GuestThread *cur_thread() {
         g_baton = 0;
     }
     return threads()[t_self];
+}
+
+// RECOMP_CS_TRACE=<hex address> (diagnostics): each entry into that critical section by a thread other than the
+// main one is logged, the first 200, with the guest clock, so it shows whether and when another thread shares it
+// (Gothic 3 D-054 step 2: fmodex's free threads in SharedBase's MemHeap lock, 1011d018).
+static void cs_trace(X86 *c, uint32_t cs) {
+    static const uint32_t watched = [] {
+        const char *v = recomp_env("CS_TRACE");
+        return v ? (uint32_t)strtoul(v, nullptr, 16) : 0u;
+    }();
+    if (!watched || cs != watched || recomp_cur_is_main_thread())
+        return;
+    static std::atomic<uint32_t> n{0};
+    const uint32_t k = n.fetch_add(1) + 1;
+    if (k <= 200)
+        LOGW("cs trace: %08x entered by guest thread %u at guest ms %u (#%u, caller %08x)", cs, cur_thread()->id,
+             host_pinned_clock_value(), k, rd32(c->r[R_ESP]));
 }
 
 uint32_t cur_tls_base() {
