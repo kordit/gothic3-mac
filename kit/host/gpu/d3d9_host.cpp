@@ -1064,6 +1064,8 @@ static FILE *frame_hash_file() {
     }();
     return f;
 }
+uint32_t host_pinned_clock_value(); // kit/runtime/win32.h
+
 static void frame_hash_write(FILE *f) {
     static std::vector<uint8_t> rgb;
     static uint64_t presents = 0;
@@ -1122,8 +1124,9 @@ static void frame_hash_write(FILE *f) {
                 sums += one;
             }
     }
-    fprintf(f, "%llu %ux%u %016llx %s %s\n", (unsigned long long)presents, w, h, (unsigned long long)hash, tiles,
-            sums.c_str());
+    // And the pinned clock as the guest reads it now: where two runs' game time parts, before their pictures do.
+    fprintf(f, "%llu %ux%u %016llx %s %s t=%u\n", (unsigned long long)presents, w, h, (unsigned long long)hash, tiles,
+            sums.c_str(), host_pinned_clock_value());
     if (presents % 60 == 0)
         fflush(f);
 }
