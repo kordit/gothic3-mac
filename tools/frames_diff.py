@@ -17,8 +17,11 @@ def load(path):
     for line in open(path):
         parts = line.split()
         if len(parts) >= 3:
-            sums = [int(x, 16) for x in parts[4].split(",")] if len(parts) > 4 and "," in parts[4] else []
-            clock = next((int(p[2:]) for p in parts[4:] if p.startswith("t=")), None)
+            try:
+                sums = [int(x, 16) for x in parts[4].split(",")] if len(parts) > 4 and "," in parts[4] else []
+                clock = next((int(p[2:]) for p in parts[4:] if p.startswith("t=")), None)
+            except ValueError:
+                break  # the last line of a run killed while it wrote
             out.append((parts[1], parts[2], parts[3] if len(parts) > 3 else "", sums, clock))
     return out
 
