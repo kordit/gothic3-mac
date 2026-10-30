@@ -25,3 +25,4 @@ docs/*
 !docs/screens/
 kit/AGENTS.md
 build-watch/
+build-snap/
