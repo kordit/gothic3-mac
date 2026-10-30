@@ -351,6 +351,25 @@ static void frame_times(uint32_t draws) {
     }
     cpu_last = cpu;
     faults_last = faults_now;
+    // RECOMP_D3D9_FRAME_SECONDS=1 (a player's app sets it): every second its frames and the slowest one, so a
+    // drop of a second or two that the window's average hides has a line of its own.
+    static const bool seconds = [] {
+        const char *e = recomp_env("D3D9_FRAME_SECONDS");
+        return e && strtoul(e, nullptr, 10) != 0;
+    }();
+    if (seconds) {
+        static uint64_t sec_start = 0, sec_frames = 0, sec_slowest = 0;
+        if (!sec_start)
+            sec_start = now - dt;
+        ++sec_frames;
+        sec_slowest = std::max(sec_slowest, dt);
+        if (now - sec_start >= 1000000000u) {
+            const double ss = (now - sec_start) / 1e9;
+            LOGW("d3d9: second: %.0f fps, slowest %.1f ms, %u draws", sec_frames / ss, sec_slowest / 1e6,
+                 draws - g_frame_base);
+            sec_start = now, sec_frames = 0, sec_slowest = 0;
+        }
+    }
     slowest = std::max(slowest, dt);
     over33 += dt > 33300000u;
     over50 += dt > 50000000u;

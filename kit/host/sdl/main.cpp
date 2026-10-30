@@ -2410,7 +2410,7 @@ int web_main(int argc, char **argv) {
 // Gothic 3 session 16: a player's app started from Finder wrote its log nowhere, so a stutter the player
 // reported had no frame times behind it. Without a terminal and outside a checkout, stdout and stderr go
 // to <profile>/logs/game.log (the run before: game-prev.log), with the frame times every 10 s unless
-// RECOMP_D3D9_FRAMES says otherwise. RECOMP_LOG_FILE=0 keeps them where they were.
+// RECOMP_D3D9_FRAMES says otherwise, and a short line every second (RECOMP_D3D9_FRAME_SECONDS=0 drops it). RECOMP_LOG_FILE=0 keeps them where they were.
 [[maybe_unused]] static void log_to_profile() {
 #if !defined(_WIN32) && !defined(__ANDROID__)
     const char *off = recomp_env("LOG_FILE");
@@ -2431,6 +2431,8 @@ int web_main(int argc, char **argv) {
     setvbuf(stdout, nullptr, _IOLBF, 0);
     if (!recomp_env("D3D9_FRAMES"))
         os_setenv("RECOMP_D3D9_FRAMES", "10");
+    if (!recomp_env("D3D9_FRAME_SECONDS")) // Gothic 3 session 28: a drop the player saw for a second or two
+        os_setenv("RECOMP_D3D9_FRAME_SECONDS", "1");
     printf(RECOMP_APP_NAME " %s\n", POP_RECOMP_VERSION);
 #endif
 }
