@@ -86,7 +86,16 @@ printf 'FRAMES=10\n' > "$out/bench.ctl"
 # BENCH_CTL=<file>: more trace control lines from the start (kit/runtime/cpu.cpp, RECOMP_TRACE_CONTROL), e.g. CALLS and STACK.
 [ -n "$BENCH_CTL" ] && cat "$BENCH_CTL" >> "$out/bench.ctl"
 
-profile=$(.venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode'))")
+# BENCH_PROFILE=<dir>: the run's own profile instead of work/autostart-<mode>/profile, so pinned runs can go side by side
+# (two runs on one profile overwrite each other's options: 30.10, two walka runs came up at 1280x960 in the menu).
+# It starts with the shared profile's warmed shaders.
+if [ -n "$BENCH_PROFILE" ]; then
+  profile=$(.venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode', '$BENCH_PROFILE'))")
+  shared="work/autostart-$mode/profile/shader-warm"
+  [ -d "$shared" ] && [ ! -d "$profile/shader-warm" ] && cp -R "$shared" "$profile/shader-warm"
+else
+  profile=$(.venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; print(run.prepare_profile('$mode'))")
+fi
 cp "$player/active-mods.json" "$profile/active-mods.json"
 [ -f "$player/mod-settings.json" ] && cp "$player/mod-settings.json" "$profile/mod-settings.json"
 if [ "$scenario" = chodzenie ]; then
