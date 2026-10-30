@@ -44,6 +44,65 @@ def module_of(name):
     return MODULES[i][1] if i >= 0 else "?"
 
 
+class Images:
+    """The staged modules (stage/, at the bases the game maps them): MSVC RTTI names of vtables, function names from
+    analysis/<module>/functions.tsv."""
+
+    def __init__(self):
+        import pathlib
+        import pefile
+        root = pathlib.Path(__file__).resolve().parent.parent
+        self.pes = []
+        for f in sorted((root / "stage").iterdir()):
+            if f.suffix.lower() in (".dll", ".exe"):
+                try:
+                    pe = pefile.PE(str(f), fast_load=True)
+                except pefile.PEFormatError:
+                    continue
+                self.pes.append((pe.OPTIONAL_HEADER.ImageBase, pe.OPTIONAL_HEADER.SizeOfImage, pe))
+        self.cache = {}
+        self.fnames = {}
+        for tsv in (root / "analysis").glob("*/functions.tsv"):
+            for line in open(tsv, errors="replace"):
+                parts = line.split("\t")
+                if len(parts) > 1 and re.fullmatch(r"[0-9a-f]{8}", parts[0]):
+                    self.fnames[int(parts[0], 16)] = parts[1]
+
+    def _pe(self, va):
+        for base, size, pe in self.pes:
+            if base <= va < base + size:
+                return base, pe
+        return None, None
+
+    def dword(self, va):
+        base, pe = self._pe(va)
+        return pe.get_dword_at_rva(va - base) if pe else None
+
+    def cstr(self, va):
+        base, pe = self._pe(va)
+        return pe.get_string_at_rva(va - base, 256).decode("latin-1") if pe else None
+
+    def class_of(self, vtable):
+        if vtable in self.cache:
+            return self.cache[vtable]
+        name = None
+        try:
+            col = self.dword(vtable - 4)
+            td = self.dword(col + 12) if col else None
+            raw = self.cstr(td + 8) if td else None
+            if raw and raw.startswith((".?AV", ".?AU")) and raw.endswith("@@"):
+                name = "::".join(reversed(raw[4:-2].split("@")))
+        except Exception:
+            name = None
+        self.cache[vtable] = name
+        return name
+
+    def fn_name(self, name):
+        m = re.match(r"(?:fn|g3n|body)_([0-9a-f]{8})$", name)
+        n = self.fnames.get(int(m.group(1), 16)) if m else None
+        return f"{name} {n}" if n and not n.startswith("FUN_") else name
+
+
 class Syms:
     def __init__(self, path):
         self.addrs, self.names = [], []
@@ -77,7 +136,7 @@ def parse(path):
         if line.startswith("memtrace "):
             label = line.split(" pages=")[0][len("memtrace "):]
             page = int(re.search(r" page=(\d+)", line).group(1)) if " page=" in line else PAGE_DEFAULT
-            cur = {"label": label, "page": page, "pages": {}, "runs": []}
+            cur = {"label": label, "page": page, "pages": {}, "runs": [], "vtables": {}}
             sections.append(cur)
         elif cur is None:
             continue
@@ -101,6 +160,9 @@ def parse(path):
                     base, size = p[4:].replace("(free)", "").split("+")
                     run["blk"] = (int(base, 16), int(size, 16), "(free)" in p)
             cur["runs"].append(run)
+        elif line.startswith("V "):
+            _, blk, dw = line.split()
+            cur["vtables"][int(blk, 16)] = int(dw, 16)
         elif line.startswith("end "):
             cur = None
     return sections
@@ -110,12 +172,30 @@ def fmt_bytes(n):
     return f"{n / 1048576:.2f} MB" if n >= 1 << 20 else f"{n / 1024:.1f} KB" if n >= 1024 else f"{n} B"
 
 
+IMAGES = None
+
+
+def block_class(sec, r):
+    if not r["blk"]:
+        return "(outside the heap)"
+    vt = sec["vtables"].get(r["blk"][0])
+    cls = IMAGES.class_of(vt) if vt is not None else None
+    return cls or f"(block {r['blk'][1]:#x} B)"
+
+
 def by_writer(runs, sec, syms, top):
     agg = collections.Counter()
     for r in runs:
         w = sec["pages"][r["page"]].get("w")
         name = syms.guest_fn(w) if w else "?"
-        agg[f"{name} [{module_of(name)}]"] += r["len"]
+        agg[f"{IMAGES.fn_name(name)} [{module_of(name)}] -> {block_class(sec, r)}"] += r["len"]
+    return agg.most_common(top)
+
+
+def by_class(runs, sec, top):
+    agg = collections.Counter()
+    for r in runs:
+        agg[block_class(sec, r)] += r["len"]
     return agg.most_common(top)
 
 
@@ -133,6 +213,8 @@ def main():
     ap.add_argument("syms")
     ap.add_argument("--top", type=int, default=15)
     a = ap.parse_args()
+    global IMAGES
+    IMAGES = Images()
     syms = Syms(a.syms)
     sections = parse(a.trace)
     by_label = {s["label"]: s for s in sections}
@@ -174,6 +256,9 @@ def main():
                   f"{fmt_bytes(sum(r['len'] for r in shared))} ({fmt_bytes(heap)} in {len(blocks) - (None in blocks)}"
                   f" heap blocks, {fmt_bytes(blocks.get(None, 0))} outside the heap)")
             for name, b in by_writer(shared, logic, syms, a.top):
+                print(f"    {fmt_bytes(b):>10}  {name}")
+            print("   by class:")
+            for name, b in by_class(shared, logic, a.top):
                 print(f"    {fmt_bytes(b):>10}  {name}")
 
 
