@@ -2136,6 +2136,7 @@ struct GuestThread {
     double deadline = 0.0;    // monotonic seconds
     uint32_t wait_result = 0; // what the wait returns once released
     double last_yield = 0.0;  // for the bounded scheduling checkpoint
+    uint32_t pinned_calls = 0; // the same checkpoint's slice while the guest clock is pinned, counted in its calls
     // A free thread (RECOMP_FREE_THREADS, sched_free_acquire) runs its own module's code without the
     // baton and asks for it only around a shim that is not thread-safe or a call out of its module.
     // It is runnable, for the scheduler, only while it asks.
@@ -2151,6 +2152,17 @@ struct GuestThread {
 // a pinned clock would make every timed wait either instant or eternal.
 double sched_now() {
     return (double)os_monotonic_ns() * 1e-9;
+}
+
+// ...except the guest's own timeouts while the clock is pinned (RECOMP_PIN_CLOCK), which is the one case the rule
+// above gets backwards. A pinned run is there to be repeatable, and a timeout on the machine's clock ends wherever the
+// machine happened to be: Gothic 3's FMOD Ex mixes on a waitable timer, the game asks its channels IsPlaying and
+// IsPaused in the logic, and two pinned fight runs parted for good right after the new game's loading. Pinned, a
+// Sleep, a timed wait and a waitable timer run on the guest's clock, which moves with frames and with the run
+// thread's polls; and when every guest thread is blocked with a timeout ahead, the scheduler moves that clock to it
+// (sched_run_others_locked) instead of sleeping, so neither instant nor eternal.
+double sched_deadline_now() {
+    return host_time_source_is_pinned() ? (double)host_pinned_clock_value() * 1e-3 : sched_now();
 }
 
 std::vector<GuestThread *> &threads() {
@@ -2759,7 +2771,7 @@ bool thread_runnable(const GuestThread *t) {
 void timer_fire(HObj *o) {
     if (!o->timer || !o->timer_armed)
         return;
-    double now = sched_now();
+    double now = sched_deadline_now();
     if (now < o->timer_due)
         return;
     o->signalled = true;
@@ -2946,7 +2958,7 @@ void apply_host_signals_locked() {
 
 void sched_expire_locked() {
     apply_host_signals_locked();
-    double now = sched_now();
+    double now = sched_deadline_now();
     for (GuestThread *t : threads()) {
         if (!t->blocked)
             continue;
@@ -2954,7 +2966,7 @@ void sched_expire_locked() {
             continue;
         if (t->has_deadline && now >= t->deadline) {
             t->blocked = false;
-            t->runnable_at = now;
+            t->runnable_at = sched_now();
             t->wait_result = t->wait_kind == W_NONE ? 0 : 0x102; // WAIT_TIMEOUT
             t->wait_kind = W_NONE;
             t->wait_n = 0;
@@ -2997,6 +3009,23 @@ double sched_earliest_deadline_locked() {
             best = t->deadline;
     }
     return best;
+}
+
+// Caller holds g_sched_m, the clock pinned. Whether a blocked thread has a timeout, or waits on an armed waitable
+// timer, that the guest's clock will reach: then moving the clock is what releases it.
+bool sched_pinned_deadline_ahead_locked() {
+    for (const GuestThread *t : threads()) {
+        if (!t->blocked || t->finished)
+            continue;
+        if (t->has_deadline)
+            return true;
+        for (uint32_t k = 0; t->wait_kind == W_OBJECTS && k < t->wait_n; ++k) {
+            const HObj *o = handle_any(t->wait_h[k]);
+            if (o && o->timer && o->timer_armed)
+                return true;
+        }
+    }
+    return false;
 }
 
 // T01 evidence: where the MAIN guest thread's wall time goes while it does not
@@ -3135,6 +3164,13 @@ void sched_run_others_locked(size_t me, const char *why) {
             continue;
         }
 
+        if (host_time_source_is_pinned() && sched_pinned_deadline_ahead_locked()) {
+            // Every guest thread is blocked and one of them, or a timer one waits on, has a timeout on the guest's
+            // clock: that clock moves to it, a frame's step at a time, rather than this thread sleeping on the
+            // machine's (sched_deadline_now).
+            host_pinned_clock_advance();
+            continue;
+        }
         double deadline = sched_earliest_deadline_locked();
         // A free thread running on its own can still signal what the others wait for (through a
         // shim it runs with the baton), so its being alive is not a deadlock.
@@ -3331,6 +3367,9 @@ bool guest_yield() {
 // call into the runtime is a checkpoint, and a thread yields at most once per
 // millisecond so the check costs a clock read on the hot path.
 const double SCHED_SLICE_SECONDS = 0.001; // default; RECOMP_SCHED_SLICE_MS overrides (sched_checkpoint)
+// The slice under a pinned clock, in checkpoint calls of one thread. Any fixed count keeps a run repeatable; a
+// pinned run is not a timing measurement, so this one only has to let a spinning thread hand the baton on soon.
+const uint32_t kPinnedSliceCalls = 1024;
 
 } // namespace
 
@@ -3491,6 +3530,24 @@ void sched_checkpoint() {
         apply_host_signals_locked();
         g_sched_m.unlock();
     }
+    // A pinned clock (RECOMP_PIN_CLOCK) is there to make two runs alike, and a slice measured on the machine's
+    // clock moves the baton between batoned threads wherever this machine happened to be after a millisecond.
+    // Gothic 3: the game thread shares the baton with PhysXCore's three workers (11299970), and PhysX takes its
+    // islands' results in the order the workers finish (WaitForMultipleObjects for any, 1122cdf0), so two pinned
+    // fight runs parted for good right after the new game's loading. Pinned, the slice is counted in the thread's
+    // own checkpoint calls, which the same guest code makes the same number of times in every run. Every call is
+    // counted, before the shared stride below, so nothing another thread does moves this one's yields.
+    if (__builtin_expect(host_time_source_is_pinned(), 0)) {
+        if (threads().size() < 2 || t_atomic)
+            return;
+        GuestThread *me = threads()[t_self];
+        if (++me->pinned_calls < kPinnedSliceCalls)
+            return;
+        me->pinned_calls = 0;
+        me->last_yield = sched_now();
+        guest_yield();
+        return;
+    }
     // Test71: every import call reaches here (thousands per frame), and reading the clock on each
     // cost ~6% of the main thread in busy driving. Read it on every 16th call only: the 1 ms slice
     // is unchanged, a yield is at most 15 calls late (microseconds), and a polling loop such as
@@ -3605,7 +3662,7 @@ void sched_sleep_ms(uint32_t ms) {
     me->wait_kind = W_NONE;
     me->wait_n = 0;
     me->has_deadline = true;
-    me->deadline = sched_now() + (double)ms / 1000.0;
+    me->deadline = sched_deadline_now() + (double)ms / 1000.0;
     g_sched_m.unlock();
     guest_block("sleep");
 }
@@ -3667,7 +3724,7 @@ uint32_t sched_wait_objects(const uint32_t *handles_, uint32_t count, bool wait_
     for (uint32_t i = 0; i < count; ++i)
         me->wait_h[i] = handles_[i];
     me->has_deadline = timeout_ms != 0xffffffffu; // INFINITE has none
-    me->deadline = me->has_deadline ? sched_now() + (double)timeout_ms / 1000.0 : 0.0;
+    me->deadline = me->has_deadline ? sched_deadline_now() + (double)timeout_ms / 1000.0 : 0.0;
     g_sched_m.unlock();
     return guest_block("wait");
 }
@@ -5137,7 +5194,7 @@ bool sched_drive_until_stopped(double timeout_seconds) {
         t->wait_kind = W_NONE;
         t->wait_n = 0;
         t->has_deadline = true;
-        t->deadline = sched_now() + kYield;
+        t->deadline = sched_deadline_now() + kYield;
         t->last_yield = sched_now();
         sched_run_others_locked(me, "shutdown drive");
         t->blocked = false;
@@ -5779,7 +5836,7 @@ void k_SetWaitableTimer(X86 *c) {
         from_now = 0.0;
     o->signalled = false;
     o->timer_armed = true;
-    o->timer_due = sched_now() + from_now;
+    o->timer_due = sched_deadline_now() + from_now;
     o->timer_period = (double)period / 1000.0;
     sched_wake_all(); // a sleeping scheduler recomputes its deadline
     set_eax(c, 1);

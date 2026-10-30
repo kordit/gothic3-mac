@@ -240,10 +240,14 @@ RecompModule g_ic_image;
 }
 void recomp_module_register(const RecompModule *m) {
     modules().push_back(m);
-    // RECOMP_FREE_THREADS=<module> or "none"; without it the game's [game] free_threads.
+    // RECOMP_FREE_THREADS=<module> or "none"; without it the game's [game] free_threads, except in a pinned run
+    // (RECOMP_PIN_CLOCK): a free thread runs on the machine's schedule, so what it has done by the time the run
+    // thread asks differs from run to run (Gothic 3: FMOD Ex's mixer, whose channels the logic asks IsPlaying).
+    // Under the baton it runs where the scheduler hands it on, which a pinned run makes the same every time.
     const char *f = recomp_env("FREE_THREADS");
 #ifdef RECOMP_FREE_THREADS_DEFAULT
-    if (!f)
+    const char *pin = recomp_env("PIN_CLOCK");
+    if (!f && !(pin && *pin && strcmp(pin, "0") != 0))
         f = RECOMP_FREE_THREADS_DEFAULT;
 #endif
     if (f)
