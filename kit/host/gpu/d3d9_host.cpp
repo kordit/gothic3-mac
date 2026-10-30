@@ -1081,7 +1081,23 @@ static void frame_hash_write(FILE *f) {
         for (; i < rgb.size(); ++i)
             hash = (hash ^ rgb[i]) * 0x100000001b3ull;
     }
-    fprintf(f, "%llu %ux%u %016llx\n", (unsigned long long)++presents, w, h, (unsigned long long)hash);
+    ++presents;
+    // RECOMP_D3D9_FRAME_HASH_DUMP=<first>-<last>: those frames also go to <hash file>.<n>.ppm, to see where two
+    // runs part.
+    static const char *dump = recomp_env("D3D9_FRAME_HASH_DUMP");
+    if (dump && !rgb.empty()) {
+        unsigned first = 0, last = 0;
+        if (sscanf(dump, "%u-%u", &first, &last) == 2 && presents >= first && presents <= last) {
+            char path[1100];
+            snprintf(path, sizeof path, "%s.%llu.ppm", recomp_env("D3D9_FRAME_HASH"), (unsigned long long)presents);
+            if (FILE *p = fopen(path, "wb")) {
+                fprintf(p, "P6\n%u %u\n255\n", w, h);
+                fwrite(rgb.data(), 1, rgb.size(), p);
+                fclose(p);
+            }
+        }
+    }
+    fprintf(f, "%llu %ux%u %016llx\n", (unsigned long long)presents, w, h, (unsigned long long)hash);
     if (presents % 60 == 0)
         fflush(f);
 }

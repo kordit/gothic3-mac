@@ -8231,7 +8231,11 @@ fragment float4 hdr_addback_fs(HV i [[stage_in]], float4 dst [[color(0)]], textu
         // Run 15 (hitch): a variant that has a plain fallback in the draw chain (defer_ok_) and is not
         // compiled yet is compiled in the background; this draw gets nil (drawn as today) and the
         // source is kept here until the library is ready, so it is translated once.
-        const bool deferrable = defer_ok_ && warm_ && (pixel ? pixel_deferrable(vx) : vertex_deferrable(v, vv));
+        // Gothic 3 D-054 step 2: not while frames are hashed (RECOMP_D3D9_FRAME_HASH), where a draw drawn plain
+        // for as long as its compile takes would make one run's picture differ from the next.
+        static const bool exact = recomp_env("D3D9_FRAME_HASH") != nullptr;
+        const bool deferrable = !exact && defer_ok_ && warm_ &&
+                                (pixel ? pixel_deferrable(vx) : vertex_deferrable(v, vv));
         auto pend = deferrable ? deferred_src_.find(key) : deferred_src_.end();
         const bool from_pending = pend != deferred_src_.end();
         bool ok = from_pending ? true

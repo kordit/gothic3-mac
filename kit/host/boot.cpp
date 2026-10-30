@@ -667,7 +667,10 @@ void boot_clock_advance() {
 }
 
 void boot_clock_poll() {
-    if (!host_time_source_is_pinned())
+    // Only the run thread's polls count. A free thread (Gothic 3: fmodex's mixer, off the baton) polls on the
+    // machine's schedule, so counting it moved the clock at another point in every run: two pinned runs of one
+    // script seeded bCRandom from different timeGetTime values during the boot and parted at the sixth frame.
+    if (!host_time_source_is_pinned() || !boot_on_run_thread())
         return;
     if (g_polls_since_frame.fetch_add(1, std::memory_order_relaxed) + 1 < kStallPolls)
         return;
