@@ -167,6 +167,42 @@ static int sn_gather(X86 *c, uint32_t db) {
     return 1;
 }
 
+/* ---- shadow maps: their gathering before their drawing --------------------------------------------------------
+ *
+ * eCFrustumDatabase::ExecuteShadowMap 10402220 (db, shadow map; RET 4), from eCRenderSystemAdmin::RenderShadowMap
+ * 1040e6b0 after RefreshFrustumData and ExtractFromShadowMap, sets the device's stencil and begins the scene, then,
+ * while the database's +0x1af is clear, asks every element for its ops (Request with flags 8, or 9 with +0x1c4; the
+ * loop at 10402300, Request returning to 10402314), sorts the occluder list +0x154 and draws the Z pass. Its other
+ * branch (+0x1af set) asks one element at a time between occlusion queries; it does not run in the game (Request is
+ * never reached from 10402508), and it is left as it is. With the group on, the loop is made here before
+ * ExecuteShadowMap, as for Execute, and Request returns at once inside it. */
+void fn_10402220(X86 *c); /* Engine eCFrustumDatabase::ExecuteShadowMap */
+uint64_t g3_snap_shadow_gathered;
+
+void g3n_10402220(X86 *c) {
+    const uint32_t db = c->r[1], outer = sn_gathered_db;
+    if (G3OPT(SNAP) && db && rd8(db + 0x1afu) == 0u) {
+        uint32_t r[8];
+        for (int i = 0; i < 8; ++i)
+            r[i] = c->r[i];
+        const uint32_t eip = c->eip;
+        const uint32_t flags = rd8(db + 0x1c4u) == 1u ? 9u : 8u;
+        const uint32_t n = rd32(db + 0x20u), items = rd32(db + 0x1cu);
+        for (uint32_t i = 0; i < n; ++i) {
+            const uint32_t args[3] = {db, flags, db + 0x124u};
+            c->r[1] = rd32(items + i * 4u);
+            guest_call(c, SN_REQUEST, args, 3);
+        }
+        for (int i = 0; i < 8; ++i)
+            c->r[i] = r[i];
+        c->eip = eip;
+        sn_gathered_db = db;
+        ++g3_snap_shadow_gathered;
+    }
+    fn_10402220(c);
+    sn_gathered_db = outer;
+}
+
 void g3n_104035c0(X86 *c) {
     if (sn_gathered_db && rd32(c->r[4] + 4u) == sn_gathered_db) {
         c->r[0] = 1u;
@@ -272,9 +308,10 @@ void g3n_10400530(X86 *c) {
     }
     static uint32_t calls;
     if (G3OPT(SNAP) && ++calls % 1200 == 0)
-        fprintf(stderr, "g3: snap: gathered before Execute %llu (far view %llu), left to it %llu; particle sorts moved "
-                "%llu, left in the drawing %llu\n", (unsigned long long)g3_snap_gathered,
-                (unsigned long long)g3_snap_far_gathered, (unsigned long long)g3_snap_gather_left,
+        fprintf(stderr, "g3: snap: gathered before Execute %llu (far view %llu, shadow maps %llu), left to it %llu; "
+                "particle sorts moved %llu, left in the drawing %llu\n", (unsigned long long)g3_snap_gathered,
+                (unsigned long long)g3_snap_far_gathered, (unsigned long long)g3_snap_shadow_gathered,
+                (unsigned long long)g3_snap_gather_left,
                 (unsigned long long)g3_snap_particles_moved, (unsigned long long)g3_snap_particles_left);
 }
 

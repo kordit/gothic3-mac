@@ -293,6 +293,8 @@ void g3n_10400530(X86 *c);
 void g3n_103afa70(X86 *c);
 #define FN_104035c0 g3n_104035c0 /* Engine eCFrustumElementItem::Request */
 void g3n_104035c0(X86 *c);
+#define FN_10402220 g3n_10402220 /* Engine eCFrustumDatabase::ExecuteShadowMap */
+void g3n_10402220(X86 *c);
 #define FN_10468f60 g3n_10468f60 /* Engine eCSpeedTreeAdmin::OnBeginRenderSolid */
 void g3n_10468f60(X86 *c);
 
