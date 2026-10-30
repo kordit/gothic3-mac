@@ -21,6 +21,7 @@ int recomp_memtrace_begin(void);                          /* kit/runtime/memtrac
 void recomp_memtrace_end(const char *label, const char *path);
 
 void recomp_phase_add(const char *name, uint64_t ns); /* kit/dx/d3d9.cpp */
+void recomp_pinned_uncounted(int on);                 /* kit/runtime/kernel32.cpp: a pinned run's counting */
 void fn_10276100(X86 *c);                              /* Engine eCApplication::DoRender */
 
 uint64_t g3_phase_now(void) {
@@ -73,7 +74,12 @@ void g3_memtrace_end(const char *what) {
 void g3n_10276100(X86 *c) {
     const uint64_t t0 = g3_phase_now();
     const int traced = g3_memtrace_frame() && recomp_memtrace_begin();
+    /* In a pinned run the drawing's calls and clock polls are not counted (kit/runtime/kernel32.cpp,
+     * recomp_pinned_uncounted): the game's time, and where the other threads run, must not follow how often the
+     * render asks. */
+    recomp_pinned_uncounted(1);
     fn_10276100(c);
+    recomp_pinned_uncounted(0);
     if (traced) {
         g3_memtrace_end("render");
         ++mt_done;
