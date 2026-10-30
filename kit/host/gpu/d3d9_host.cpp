@@ -42,6 +42,7 @@
 #include <thread>
 #include <type_traits>
 #include <unordered_map>
+#include <string>
 #include <vector>
 
 #ifdef __EMSCRIPTEN__
@@ -1099,21 +1100,30 @@ static void frame_hash_write(FILE *f) {
             }
         }
     }
-    // And a 16-bit hash of each tile of an 8x8 grid, so a difference between two runs shows where it is.
+    // And a 16-bit hash of each tile of an 8x8 grid, so a difference between two runs shows where it is, and each
+    // tile's sum of channel values, so it also shows how much (a pixel one level off moves its tile's sum by 1-3).
     char tiles[8 * 8 * 4 + 1] = "";
+    std::string sums;
     if (!rgb.empty() && w >= 8 && h >= 8) {
         for (uint32_t ty = 0; ty < 8; ++ty)
             for (uint32_t tx = 0; tx < 8; ++tx) {
                 uint32_t th = 2166136261u;
+                uint64_t sum = 0;
                 for (uint32_t y = ty * h / 8; y < (ty + 1) * h / 8; ++y) {
                     const uint8_t *row = rgb.data() + ((size_t)y * w + tx * w / 8) * 3;
-                    for (uint32_t x = 0; x < ((tx + 1) * w / 8 - tx * w / 8) * 3; ++x)
+                    for (uint32_t x = 0; x < ((tx + 1) * w / 8 - tx * w / 8) * 3; ++x) {
                         th = (th ^ row[x]) * 16777619u;
+                        sum += row[x];
+                    }
                 }
                 snprintf(tiles + (ty * 8 + tx) * 4, 5, "%04x", (th ^ (th >> 16)) & 0xffff);
+                char one[24];
+                snprintf(one, sizeof one, "%s%llx", sums.empty() ? "" : ",", (unsigned long long)sum);
+                sums += one;
             }
     }
-    fprintf(f, "%llu %ux%u %016llx %s\n", (unsigned long long)presents, w, h, (unsigned long long)hash, tiles);
+    fprintf(f, "%llu %ux%u %016llx %s %s\n", (unsigned long long)presents, w, h, (unsigned long long)hash, tiles,
+            sums.c_str());
     if (presents % 60 == 0)
         fflush(f);
 }
