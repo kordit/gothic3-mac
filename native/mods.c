@@ -1363,11 +1363,18 @@ static void g3f_process(X86 *c) {
 uint64_t g3_phase_now(void);                    /* phases.c */
 void g3_phase(const char *name, uint64_t t0);  /* phases.c */
 
+int g3_memtrace_frame(void);                     /* phases.c: MEMTRACE= */
+void g3_memtrace_end(const char *what);         /* phases.c */
+int recomp_memtrace_begin(void);                /* kit/runtime/memtrace.h */
+
 void g3n_10276490(X86 *c) {
     const uint64_t t0 = g3_phase_now();
+    const int traced = g3_memtrace_frame() && recomp_memtrace_begin();
     fn_10276490(c);
     if (g3f())
         g3f_process(c);
+    if (traced)
+        g3_memtrace_end("logic");
     g3_phase("logic", t0);
 }
 

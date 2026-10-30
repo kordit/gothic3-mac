@@ -57,6 +57,7 @@ static void report(const char *why) {
 static uint32_t g3_start = G3OPT_DEFAULT;
 void g3_console_control(const char *text); /* native/console.c: G3CMD= lines */
 void g3_mods_control(const char *text);    /* native/mods.c: G3LOC= lines */
+void g3_memtrace_control(const char *text); /* native/phases.c: MEMTRACE= lines */
 
 /* kit/runtime/cpu.cpp: every applied control text. */
 extern void (*recomp_trace_game_hook)(const char *text);
@@ -69,6 +70,7 @@ static void control(const char *text) {
     report("trace control");
     g3_console_control(text);
     g3_mods_control(text);
+    g3_memtrace_control(text);
 }
 
 __attribute__((constructor)) static void g3_opt_init(void) {

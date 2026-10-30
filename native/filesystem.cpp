@@ -20,6 +20,7 @@
 #include "runtime/imports.h"
 #include "runtime/loader.h"
 #include "runtime/memory.h"
+#include "runtime/memtrace.h"
 #include "runtime/win32.h"
 
 #include <atomic>
@@ -446,6 +447,7 @@ void s_read(X86 *c) { // (buf, n)
         if (!lend)
             g.lock();
     }
+    recomp_memtrace_touch(buf, n, 1); // kit/runtime/memtrace.h: a traced page fails a read with EFAULT
     const int64_t got = g3fs::pack_pread(*f->pack, f->node->offset + at, g_mem + buf, n);
     if (lend) {
         recomp_host_work_end();
