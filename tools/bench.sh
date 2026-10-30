@@ -28,6 +28,12 @@ case "$scenario" in
 esac
 # BENCH_SECS=<s>: a shorter run, e.g. chodzenie for the first half minute of walking after the load (150).
 secs=${BENCH_SECS:-$secs}
+# BENCH_PIN=<start>:<step> (D-054 step 2): the guest's clock moves <step> ms a presented frame (RECOMP_PIN_CLOCK), and
+# the script's waits with it, so two runs of one script see the same input at the same frame; not a timing
+# measurement. The run may then take up to three times its seconds. BENCH_HASH=1: every frame's picture hashed into
+# frames.hash (RECOMP_D3D9_FRAME_HASH), to compare runs with tools/frames_diff.py.
+real=$secs
+[ -n "$BENCH_PIN" ] && real=$((secs * 3))
 label=${2:-$scenario-$(date +%m%d-%H%M)}
 out="$PWD/work/bench-$label"
 rm -rf "$out" && mkdir -p "$out" || exit 1
@@ -97,10 +103,12 @@ done
 .venv/bin/python -c "import sys; sys.path.insert(0, 'tools'); import run; run.build_mod_view('$profile')" >&2
 nm -n "$bin" > "$out/syms.txt"
 
+[ -n "$BENCH_PIN" ] && export RECOMP_PIN_CLOCK="$BENCH_PIN"
+[ -n "$BENCH_HASH" ] && export RECOMP_D3D9_FRAME_HASH="$out/frames.hash"
 # The new game's intro (G3_Intro.bik, about 214 s) skipped; without it a scripted new game sat at 1 draw per frame.
 RECOMP_EXE="$player/game/Gothic3Final.exe" RECOMP_BINK_SKIP=G3_Intro \
   RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
-  RECOMP_TRACE_CONTROL="$out/bench.ctl" RECOMP_SMOKE_SECONDS="$((secs + 10))" RECOMP_SMOKE_DRAWABLE=3456x2170 \
+  RECOMP_TRACE_CONTROL="$out/bench.ctl" RECOMP_SMOKE_SECONDS="$((real + 10))" RECOMP_SMOKE_DRAWABLE=3456x2170 \
   RECOMP_HOST_PROFILE="$out/s" RECOMP_HOST_PROFILE_SPIKE=45 RECOMP_HOST_DUMP_DIR="$out" \
   nohup "$bin" --script "$out/bench.smoke" > "$out/bench.log" 2>&1 &
 pid=$!
@@ -122,7 +130,7 @@ if [ "$scenario" = sceny ]; then
     done
   ) &
 fi
-end=$(( $(date +%s) + secs + 30 ))
+end=$(( $(date +%s) + real + 30 ))
 while kill -0 "$pid" 2>/dev/null && [ "$(date +%s)" -lt "$end" ]; do sleep 5; done
 kill "$pid" 2>/dev/null
 sleep 4
