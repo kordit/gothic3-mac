@@ -20,7 +20,8 @@ extern "C" {
 #endif
 // 1 when the arena is now traced; 0 when already on, unsupported, or the tables cannot be had.
 int recomp_memtrace_begin(void);
-// Stops, restores the arena and appends the report under `label` to `path` (stderr when NULL). Nothing when off.
+// Stops, restores the arena and appends the report under `label` to `path` (stderr when NULL), and the written pages'
+// contents to `path`.pages. Nothing when off.
 void recomp_memtrace_end(const char *label, const char *path);
 int recomp_memtrace_active(void);
 // Opens [addr, addr+len) as a fault would (write: for writing), recorded as touched by the caller; before a syscall.

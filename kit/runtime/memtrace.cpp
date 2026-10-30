@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 #if defined(__APPLE__) && defined(__aarch64__)
@@ -320,6 +321,24 @@ extern "C" void recomp_memtrace_end(const char *label, const char *path) {
         mprotect(page_at(first), (size_t)(last - first) * g_page, PROT_READ | PROT_WRITE);
     });
     g_on.store(false, std::memory_order_release);
+    // The written pages as they are now, to <path>.pages (label length, label, page address, the page): a tool finds
+    // the objects in them (a game's own pools put many in one heap block).
+    if (path) {
+        std::string pages = std::string(path) + ".pages";
+        if (FILE *pf = fopen(pages.c_str(), "ab")) {
+            const uint32_t len = label ? (uint32_t)strlen(label) : 0;
+            for (uint32_t i = 0; i < touched; ++i) {
+                const uint32_t page = g_touched[i], at = page * g_page;
+                if (g_state[page] != kWritten)
+                    continue;
+                fwrite(&len, 4, 1, pf);
+                fwrite(label ? label : "", 1, len, pf);
+                fwrite(&at, 4, 1, pf);
+                fwrite(page_at(page), 1, g_page, pf);
+            }
+            fclose(pf);
+        }
+    }
     // Each written block's first dword, read with the arena open again: for an object, its vtable.
     std::sort(g_blocks_seen.begin(), g_blocks_seen.end());
     g_blocks_seen.erase(std::unique(g_blocks_seen.begin(), g_blocks_seen.end()), g_blocks_seen.end());
