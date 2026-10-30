@@ -24,7 +24,12 @@ enum {
     G3OPT_AOCACHE = 1u << 23, /* aocache: a SpeedTree's ambient occlusion from a result computed offline (aocache.c) */
     G3OPT_FMODOGG = 1u << 24, /* fmodogg: an Ogg Vorbis sample decoded natively before FMOD makes it (fmodogg.c) */
     G3OPT_NAVZONE = 1u << 25, /* navzone: gCNavZone_PS::Test3DPointInZone as one native function (navzone.c) */
+    G3OPT_SNAP = 1u << 26, /* snap: the render's writes to the logic's state moved to the end of its gathering (snap.c, D-054); off by default */
+    G3OPT_FMODMEM = 1u << 28, /* fmodmem: FMOD's memory from the kit's span, not the game's heap (fmodmem.c); off by default */
 };
+/* The groups the player's game and every bench run without a G3OPT key: all but those still being checked (D-054:
+ * snap enters with milestone 7.12). */
+#define G3OPT_DEFAULT (0xffffffffu & ~(G3OPT_SNAP | G3OPT_FMODMEM))
 
 extern volatile uint32_t g3_opt;
 #define G3OPT(bit) ((g3_opt & G3OPT_##bit) != 0)

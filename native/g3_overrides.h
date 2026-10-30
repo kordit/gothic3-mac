@@ -283,4 +283,27 @@ void g3n_113bf8d0(X86 *c);
 #define FN_10a27180 g3n_10a27180 /* Game gCNavZone_PS::Test3DPointInZone */
 void g3n_10a27180(X86 *c);
 
+/* snap (snap.c): the render's gathering and execution apart, and its writes to the logic's state moved to the end of
+ * the gathering (D-054 points 2 and 3, docs/PLAN.md step 3) */
+#define FN_1040e430 g3n_1040e430 /* Engine eCRenderSystemAdmin::Render */
+void g3n_1040e430(X86 *c);
+#define FN_10400530 g3n_10400530 /* Engine eCFrustumDatabase::Execute */
+void g3n_10400530(X86 *c);
+#define FN_103afa70 g3n_103afa70 /* Engine eCParticle_PS::DepthSortParticles */
+void g3n_103afa70(X86 *c);
+#define FN_103ffbe0 g3n_103ffbe0 /* Engine eCFrustumDatabase::ExecuteRenderList */
+void g3n_103ffbe0(X86 *c);
+#define FN_1040c140 g3n_1040c140 /* Engine eCRenderOp2::Render */
+void g3n_1040c140(X86 *c);
+#define FN_10468f60 g3n_10468f60 /* Engine eCSpeedTreeAdmin::OnBeginRenderSolid */
+void g3n_10468f60(X86 *c);
+
+/* fmodmem (fmodmem.c): FMOD's memory callbacks from the kit's span instead of SharedBase's MemHeap */
+#define FN_103cb030 g3n_103cb030 /* Engine eCAudioSystem::FModAllocMemory */
+void g3n_103cb030(X86 *c);
+#define FN_102b7190 g3n_102b7190 /* Engine eCAudioSystem::FModReallocMemory */
+void g3n_102b7190(X86 *c);
+#define FN_102b71b0 g3n_102b71b0 /* Engine eCAudioSystem::FModFreeMemory */
+void g3n_102b71b0(X86 *c);
+
 #endif
