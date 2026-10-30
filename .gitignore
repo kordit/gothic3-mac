@@ -24,3 +24,4 @@ docs/*
 !docs/release-notes.md
 !docs/screens/
 kit/AGENTS.md
+build-watch/

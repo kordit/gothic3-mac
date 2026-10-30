@@ -38,7 +38,7 @@ label=${2:-$scenario-$(date +%m%d-%H%M)}
 out="$PWD/work/bench-$label"
 rm -rf "$out" && mkdir -p "$out" || exit 1
 player="$HOME/Library/Application Support/Gothic 3 Native"
-bin=build/recomp/pop_smoke
+bin=${BENCH_BIN:-build/recomp/pop_smoke} # BENCH_BIN: another build of it (the read watch build, build-watch)
 
 # The input: smoke script lines (kit/host/script.h), then the run's length.
 steps=
