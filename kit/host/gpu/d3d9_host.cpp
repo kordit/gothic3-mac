@@ -1052,6 +1052,40 @@ void host_d9_stretch(HostD9Surface src, const int32_t src_rect[4], HostD9Surface
     t->batch().commands.push_back(c);
     t->submitted();
 }
+// RECOMP_D3D9_FRAME_HASH=<file>: every presented frame is read back whole and hashed, a line a frame ("<present>
+// <w>x<h> <hash>"), so two runs of one script can be compared frame by frame (Gothic 3 D-054 step 2: the reference a
+// change that must not change the picture is held to). Presents go synchronously while it is on, so the frame read
+// is the one just presented.
+static FILE *frame_hash_file() {
+    static FILE *f = [] {
+        const char *path = recomp_env("D3D9_FRAME_HASH");
+        return path && *path ? fopen(path, "w") : nullptr;
+    }();
+    return f;
+}
+static void frame_hash_write(FILE *f) {
+    static std::vector<uint8_t> rgb;
+    static uint64_t presents = 0;
+    uint32_t w = 0, h = 0;
+    host_d9_read_presented(nullptr, 0, &w, &h);
+    rgb.resize((size_t)w * h * 3);
+    uint64_t hash = 0x6a09e667f3bcc908ull;
+    if (!rgb.empty() && host_d9_read_presented(rgb.data(), (uint32_t)rgb.size(), &w, &h)) {
+        size_t i = 0;
+        for (; i + 8 <= rgb.size(); i += 8) {
+            uint64_t v;
+            memcpy(&v, rgb.data() + i, 8);
+            hash = (hash ^ v) * 0x9e3779b97f4a7c15ull;
+            hash ^= hash >> 29;
+        }
+        for (; i < rgb.size(); ++i)
+            hash = (hash ^ rgb[i]) * 0x100000001b3ull;
+    }
+    fprintf(f, "%llu %ux%u %016llx\n", (unsigned long long)++presents, w, h, (unsigned long long)hash);
+    if (presents % 60 == 0)
+        fflush(f);
+}
+
 void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
     recomp_ab::tick(); // TEST ONLY phase of an in-run A/B; nothing unless RECOMP_AB_PERIOD is set
     rprof::frame();    // Remaster A4 design input; nothing unless RECOMP_REMASTER_PROF=1
@@ -1078,7 +1112,8 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
     if (!t)
         return;
     const uint64_t t0 = os_monotonic_ns();
-    const int ahead = present_ahead();
+    FILE *hash = frame_hash_file();
+    const int ahead = hash ? 0 : present_ahead();
     void *stage = nullptr;
     if (ahead > 0 && t->own_thread() && !host_d9_admission_enabled() &&
         host_present_stage_defer((int)width, (int)height, &stage) >= 0) {
@@ -1099,6 +1134,8 @@ void host_d9_present(uint32_t backbuffer, uint32_t width, uint32_t height) {
             backend()->present(backbuffer, width, height);
         });
     g_queue_stats.present_wait_ns += os_monotonic_ns() - t0;
+    if (hash)
+        frame_hash_write(hash);
 }
 void host_d9_present_async(int frames) {
     g_present_ahead_live.store(frames < 0 ? -1 : frames, std::memory_order_relaxed);
