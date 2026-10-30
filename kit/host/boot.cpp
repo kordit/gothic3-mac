@@ -23,6 +23,10 @@
 #include <string.h>
 
 #include <atomic>
+#include <array>
+#include <dlfcn.h>
+#include <execinfo.h>
+#include <map>
 #include <vector>
 
 namespace {
@@ -659,9 +663,72 @@ void boot_present_windows() {
     gdi_present_windows(true);
 }
 
+// RECOMP_CLOCK_POLL_TRACE=<first>-<last> (diagnostics, pinned runs): for each frame in that range, who polled the
+// clock on the run thread and how often, by the guest's return address and the host function that asked, so two
+// runs whose clocks part show which poll counted differently. Gothic 3: after the new game's loading a frame polls
+// thousands of times and the stall breaker steps the clock 3-14 times a frame.
+namespace {
+struct PollTrace {
+    uint32_t first = 0, last = 0;
+    uint32_t frame = 0;
+    std::map<std::pair<uint32_t, std::array<void *, 4>>, uint32_t> counts;
+};
+PollTrace *poll_trace() {
+    static PollTrace *t = [] {
+        const char *v = recomp_env("CLOCK_POLL_TRACE");
+        if (!v || !*v)
+            return (PollTrace *)nullptr;
+        PollTrace *p = new PollTrace();
+        char *end = nullptr;
+        p->first = (uint32_t)strtoul(v, &end, 10);
+        p->last = (end && *end == '-') ? (uint32_t)strtoul(end + 1, nullptr, 10) : p->first;
+        return p;
+    }();
+    return t;
+}
+__attribute__((noinline)) void poll_trace_note() {
+    PollTrace *t = poll_trace();
+    if (t->frame < t->first || t->frame > t->last)
+        return;
+    X86 *c = guest_current_context();
+    const uint32_t ret = c ? rd32(c->r[R_ESP]) : 0;
+    void *bt[7] = {};
+    const int n = backtrace(bt, 7);
+    std::array<void *, 4> host{};
+    for (int k = 0; k < 4 && k + 2 < n; ++k)
+        host[k] = bt[k + 2]; // past this and boot_clock_poll
+    ++t->counts[{ret, host}];
+}
+void poll_trace_frame_end() {
+    PollTrace *t = poll_trace();
+    if (t->frame >= t->first && t->frame <= t->last) {
+        uint32_t total = 0;
+        for (const auto &kv : t->counts)
+            total += kv.second;
+        fprintf(stderr, "[host] clock polls frame %u: %u, stalls %u, clock %u\n", t->frame, total, g_clock_stalls,
+                host_pinned_clock_value());
+        for (const auto &kv : t->counts) {
+            fprintf(stderr, "[host]   %u from guest %08x via", kv.second, kv.first.first);
+            for (void *a : kv.first.second) {
+                Dl_info info{};
+                if (a && dladdr(a, &info) && info.dli_sname)
+                    fprintf(stderr, " %s", info.dli_sname);
+                else
+                    fprintf(stderr, " %p", a);
+            }
+            fputc('\n', stderr);
+        }
+        t->counts.clear();
+    }
+    ++t->frame;
+}
+} // namespace
+
 void boot_clock_advance() {
     if (!host_time_source_is_pinned())
         return;
+    if (poll_trace())
+        poll_trace_frame_end();
     g_polls_since_frame.store(0, std::memory_order_relaxed);
     host_pinned_clock_advance();
 }
@@ -672,6 +739,8 @@ void boot_clock_poll() {
     // script seeded bCRandom from different timeGetTime values during the boot and parted at the sixth frame.
     if (!host_time_source_is_pinned() || !boot_on_run_thread())
         return;
+    if (poll_trace())
+        poll_trace_note();
     if (g_polls_since_frame.fetch_add(1, std::memory_order_relaxed) + 1 < kStallPolls)
         return;
     g_polls_since_frame.store(0, std::memory_order_relaxed);
