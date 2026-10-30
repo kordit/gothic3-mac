@@ -1086,13 +1086,15 @@ static void frame_hash_write(FILE *f) {
     // runs part.
     static const char *dump = recomp_env("D3D9_FRAME_HASH_DUMP");
     if (dump && !rgb.empty()) {
-        unsigned first = 0, last = 0;
-        if (sscanf(dump, "%u-%u", &first, &last) == 2 && presents >= first && presents <= last) {
+        // ":<rows>" after the range keeps only the top rows of each.
+        unsigned first = 0, last = 0, rows = h;
+        if (sscanf(dump, "%u-%u:%u", &first, &last, &rows) >= 2 && presents >= first && presents <= last) {
+            rows = rows < h ? rows : h;
             char path[1100];
             snprintf(path, sizeof path, "%s.%llu.ppm", recomp_env("D3D9_FRAME_HASH"), (unsigned long long)presents);
             if (FILE *p = fopen(path, "wb")) {
-                fprintf(p, "P6\n%u %u\n255\n", w, h);
-                fwrite(rgb.data(), 1, rgb.size(), p);
+                fprintf(p, "P6\n%u %u\n255\n", w, rows);
+                fwrite(rgb.data(), 1, (size_t)w * rows * 3, p);
                 fclose(p);
             }
         }
