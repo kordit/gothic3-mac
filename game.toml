@@ -70,7 +70,7 @@ overrides = "native/g3_overrides.h"
 # tools/pgo.sh (an instrumented build run headless on the player's setup); stage/ is not in git, like the modules.
 lto = true
 pgo_profile = "stage/gothic3.profdata"
-native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/createlod.c", "native/ao.c", "native/aocache.c", "native/aobake.c", "native/fmodogg.c", "native/navzone.c", "native/fmodcheck.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/snap.c", "native/fmodmem.c", "native/savezip.c", "native/navfix.c", "native/findway.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a", "/opt/homebrew/lib/libvorbisfile.a", "/opt/homebrew/lib/libvorbis.a", "/opt/homebrew/lib/libogg.a"] }
+native = { header = "native/g3_overrides.h", sources = ["native/g3_opt.c", "native/rand.c", "native/particles.c", "native/d3d.c", "native/strings.c", "native/memory.c", "native/vector.c", "native/scene.c", "native/leaf.c", "native/shadow.c", "native/console.c", "native/exec.c", "native/pdo.c", "native/move.c", "native/uv.c", "native/anim.c", "native/createlod.c", "native/ao.c", "native/aocache.c", "native/aobake.c", "native/fmodogg.c", "native/navzone.c", "native/fmodcheck.c", "native/savegame.c", "native/mods.c", "native/phases.c", "native/snap.c", "native/fmodmem.c", "native/savezip.c", "native/navfix.c", "native/findway.c", "native/arenatrace.c", "native/filesystem_core.cpp", "native/filesystem.cpp", "native/filesystem_match.c"], libs = ["/opt/homebrew/lib/libdeflate.a", "/opt/homebrew/lib/libvorbisfile.a", "/opt/homebrew/lib/libvorbis.a", "/opt/homebrew/lib/libogg.a"] }
 
 [hooks]
 # Sentinels.
@@ -212,7 +212,11 @@ listings = "analysis/Game.dll"
 # G3Fixes hook 19: MOV EBX,[EAX+0x14] in gCInventory_PS::CanLearnSkill (native_site_109c656f)
 native_sites = [{at = 0x109c656f, resume = [0x109c6572]},
     # navfix (native/navfix.c): FindWay's record without a property set gets an empty ID instead of a call to 0
-    {at = 0x10a40550, resume = [0x10a40561]}, {at = 0x10a4051b, resume = [0x10a4052c]}]
+    {at = 0x10a40550, resume = [0x10a40561]}, {at = 0x10a4051b, resume = [0x10a4052c]},
+    # native/arenatrace.c (G3_ARENA_TRACE=1): sAIGotoItlLoop after its MOV EBP,ESP
+    {at = 0x10a7ca73},
+    # native/arenatrace.c: gCNavigationMap::FindWay(gCNavigation_PS *) after its MOV EBP,ESP
+    {at = 0x10a3efc3}]
 
 [modules.aux.gfc]
 name = "GFC.dll"
@@ -277,6 +281,9 @@ native_sites = [
     {at = 0x10fd9a35, resume = [0x10fd9a3a]},
     {at = 0x10fd64fa},
     {at = 0x10fd6545},
+    # native/arenatrace.c (G3_ARENA_TRACE=1): ZS_Arena and ZS_Arena_Loop after their MOV EBP,ESP
+    {at = 0x10fc19a3},
+    {at = 0x10fc1f43},
 ]
 
 [modules.aux.dialogs]

@@ -186,6 +186,125 @@ static int fw_reachable(Fw *w, uint32_t esp, uint32_t *searched) {
     return w->bad ? -1 : 0;
 }
 
+/* G3_FINDWAY_DUMP=1: for a way with no way, the entities on both ends and what each end reaches (findway_dump). An
+ * entity is a set's +0xc (eCEntityPropertySet::GetEntity, Engine 102818a0), its name the bCString at +0x138
+ * (eCEntity::GetName 10485420), its world position the bCVector at +0x70 (GetWorldPosition 104871d0). */
+static void fw_name(uint32_t set, char *out, size_t size) {
+    const uint32_t ent = set ? rd32(set + 0xcu) : 0u, text = ent ? rd32(ent + 0x138u) : 0u;
+    size_t i = 0;
+    for (; text && i + 1 < size && g_mem[text + i]; ++i)
+        out[i] = (char)g_mem[text + i];
+    out[i] = 0;
+    if (!i)
+        snprintf(out, size, "?%08x", set);
+}
+
+static void fw_where(uint32_t set, float p[3]) {
+    const uint32_t ent = set ? rd32(set + 0xcu) : 0u;
+    for (int i = 0; i < 3; ++i)
+        p[i] = ent ? rdf32(ent + 0x70u + 4u * (uint32_t)i) : 0.0f;
+}
+
+/* Every set reached from area `area` (index), both sides of every link, by the walk of fw_reachable without a goal. */
+static void fw_component(Fw *w, int32_t area, int from_zone, const char *label) {
+    const uint32_t a = rd32(w->map + 0x14u) + (uint32_t)area * 0x30u;
+    const uint32_t n = rd16(a + 0x2au), links = rd32(a + 0x2cu);
+    w->qn = 0;
+    if (w->seen)
+        memset(w->seen, 0, w->n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t link = rd32(links + i * 4u);
+        if (!fw_grow(w, link))
+            return;
+        if (from_zone && fw_closed(w, fw_set(w, link, 1)))
+            continue;
+        fw_push(w, link);
+    }
+    for (uint32_t q = 0; q < w->qn && !w->bad; ++q) {
+        const uint32_t from = w->queue[q];
+        const uint32_t count = rd16(w->adj + from * 8u + 2u), list = rd32(w->adj + from * 8u + 4u);
+        for (uint32_t j = 0; j < count; ++j) {
+            const uint32_t e = list + j * 0xcu, to = rd32(e + 8u);
+            if (to == from || !fw_grow(w, to) || w->seen[to])
+                continue;
+            const int far = rd8(e + 4u) == 0u;
+            if (far && fw_closed(w, fw_set(w, to, far)))
+                continue;
+            fw_push(w, to);
+        }
+    }
+    uint32_t sets[512], ns = 0;
+    for (uint32_t q = 0; q < w->qn; ++q)
+        for (int side = 0; side < 2; ++side) {
+            const uint32_t s = fw_set(w, w->queue[q], side);
+            uint32_t k = 0;
+            while (k < ns && sets[k] != s)
+                ++k;
+            if (k == ns && ns < 512u)
+                sets[ns++] = s;
+        }
+    fprintf(stderr, "[g3] findway dump: %s reaches %u links, %u sets:", label, w->qn, ns);
+    for (uint32_t k = 0; k < ns; ++k) {
+        char name[96];
+        float p[3];
+        fw_name(sets[k], name, sizeof name);
+        fw_where(sets[k], p);
+        fprintf(stderr, " %s(%.0f,%.0f,%.0f)%s", name, p[0], p[1], p[2], rd8(sets[k] + 0xb8u) ? "" : "[closed]");
+    }
+    fprintf(stderr, "\n");
+}
+
+static void findway_dump(X86 *c, uint32_t esp) {
+    Fw w = {0};
+    w.c = c;
+    w.get_set = rd32(FW_GET_SET_IMPORT);
+    w.map = c->r[R_ECX];
+    w.links = rd32(w.map + 0x20u);
+    w.adj = rd32(w.map + 0x2cu);
+    w.doors = rd8(esp + 28u) != 0u;
+    const uint32_t from = rd32(esp + 4u), to = rd32(esp + 8u), pa = rd32(esp + 12u), pb = rd32(esp + 16u);
+    const uint32_t set_a = fw_thiscall(c, w.get_set, pa, 0, 0), set_b = fw_thiscall(c, w.get_set, pb, 0, 0);
+    char na[96], nb[96];
+    fw_name(set_a, na, sizeof na);
+    fw_name(set_b, nb, sizeof nb);
+    fprintf(stderr, "[g3] findway dump: from (%.0f,%.0f,%.0f) in %s %s, to (%.0f,%.0f,%.0f) in %s %s, doors %u\n",
+            rdf32(from), rdf32(from + 4u), rdf32(from + 8u), rd8(pa + 0x24u) ? "path" : "zone", na, rdf32(to),
+            rdf32(to + 4u), rdf32(to + 8u), rd8(pb + 0x24u) ? "path" : "zone", nb, w.doors);
+    uint32_t arg = pa;
+    const int32_t ia = (int32_t)fw_thiscall(c, FW_AREA_INDEX, w.map, &arg, 1);
+    arg = pb;
+    const int32_t ib = (int32_t)fw_thiscall(c, FW_AREA_INDEX, w.map, &arg, 1);
+    for (int end = 0; end < 2; ++end) {
+        const uint32_t s = end ? set_b : set_a, ent = s ? rd32(s + 0xcu) : 0u;
+        const int32_t idx = end ? ib : ia;
+        if (!ent || idx < 0)
+            continue;
+        const uint32_t area = rd32(w.map + 0x14u) + (uint32_t)idx * 0x30u;
+        const uint32_t n = rd16(area + 0x2au), links = rd32(area + 0x2cu);
+        fprintf(stderr, "[g3] findway dump: %s entity %08x at %08x %08x %08x, area %d, %u links:", end ? "destination" : "start",
+                ent, rd32(ent + 0x70u), rd32(ent + 0x74u), rd32(ent + 0x78u), idx, n);
+        for (uint32_t i = 0; i < n && i < 16u; ++i) {
+            const uint32_t link = rd32(links + i * 4u);
+            if (!fw_grow(&w, link))
+                break;
+            char n0[96], n1[96];
+            fw_name(fw_set(&w, link, 0), n0, sizeof n0);
+            fw_name(fw_set(&w, link, 1), n1, sizeof n1);
+            fprintf(stderr, " #%u near %s%s far %s%s", link, n0, fw_set(&w, link, 0) == s ? "(self)" : "", n1,
+                    fw_set(&w, link, 1) == s ? "(self)" : "");
+        }
+        fprintf(stderr, "\n");
+    }
+    if (ia >= 0)
+        fw_component(&w, ia, rd8(pa + 0x24u) == 0u, "start");
+    if (ib >= 0)
+        fw_component(&w, ib, rd8(pb + 0x24u) == 0u, "destination");
+    free(w.seen);
+    free(w.set_c);
+    free(w.set_30);
+    free(w.queue);
+}
+
 static double fw_ms(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
@@ -237,6 +356,15 @@ void g3n_10a41090(X86 *c) {
     if (reach != 0) {
         fn_10a41090(c);
         return;
+    }
+    static int dump = -1;
+    if (dump < 0) {
+        const char *v = getenv("G3_FINDWAY_DUMP");
+        dump = v && *v == '1';
+    }
+    if (dump && shorts < 20u) {
+        findway_dump(c, esp);
+        memcpy(c->r, saved, sizeof saved);
     }
     /* The breaker's answer (10a41d9e): the way cleared at the start, deadlock true, 0. */
     const uint32_t way = rd32(esp + 20u), deadlock = rd32(esp + 24u);
