@@ -10,7 +10,7 @@
 #              world frozen (timer.fTimeScale=0) 15 s later, and two frames 1 s apart, smoke_<name>_{a,b}_present.ppm.
 #              The two frames' difference is the scene's own noise. Compared by tools/sceny_diff.py.
 # Everything of one run goes to work/bench-<etykieta>/ (default <scenariusz>-<MMDD-HHMM>): bench.log (frame times
-# every 10 s, FRAMES=10), the stacks of every frame over 45 ms (s-spike-*.txt, with syms.txt), and at the end a
+# every 10 s, FRAMES=10), the stacks of every frame over 45 ms (BENCH_SPIKE=<ms>; s-spike-*.txt, with syms.txt), and at the end a
 # summary of both on stdout (tools/bench_summary.py, tools/spike_report.py). Stopped by PID after its time.
 #
 # The player's setup, copies only, never their files (user, 28.10.2026: measurements on other data than the
@@ -81,6 +81,9 @@ if [ "$scenario" = sceny ]; then
   done
 fi
 printf '%b' "$steps" > "$out/bench.smoke"
+# BENCH_STEPS=<file>: smoke script lines instead of the scenario's own input, on the scenario's setup (chodzenie: the
+# player's QuickSave), e.g. F9, then a screen or a dialog to measure.
+[ -n "$BENCH_STEPS" ] && cp "$BENCH_STEPS" "$out/bench.smoke"
 printf 'wait %s\nquit\n' "$((secs * 1000))" >> "$out/bench.smoke"
 printf 'FRAMES=10\n' > "$out/bench.ctl"
 # BENCH_CTL=<file>: more trace control lines from the start (kit/runtime/cpu.cpp, RECOMP_TRACE_CONTROL), e.g. CALLS and STACK.
@@ -100,7 +103,9 @@ cp "$player/active-mods.json" "$profile/active-mods.json"
 [ -f "$player/mod-settings.json" ] && cp "$player/mod-settings.json" "$profile/mod-settings.json"
 if [ "$scenario" = chodzenie ]; then
   mkdir -p "$profile/Documents/gothic3"
-  cp -p "$player/Documents/gothic3/QuickSave.g3savcpx"* "$profile/Documents/gothic3/"
+  # BENCH_SAVE=<dir>: the QuickSave from that folder instead of the player's latest (a copy keeps a scene fixed while
+  # the player goes on saving).
+  cp -p "${BENCH_SAVE:-$player/Documents/gothic3}/QuickSave.g3savcpx"* "$profile/Documents/gothic3/"
 fi
 mkdir -p "$profile/Data"
 for f in "$profile"/Data/*.pak "$profile"/Data/*.cpt "$profile"/Data/*.p[0-9][0-9]; do
@@ -120,7 +125,7 @@ nm -n "$bin" > "$out/syms.txt"
 RECOMP_EXE="$player/game/Gothic3Final.exe" RECOMP_BINK_SKIP=G3_Intro \
   RECOMP_PROFILE_DIR="$profile" RECOMP_D3D9_SHADER_WARM_DIR="$profile/shader-warm" RECOMP_ASSUME_FOCUS=1 \
   RECOMP_TRACE_CONTROL="$out/bench.ctl" RECOMP_SMOKE_SECONDS="$((real + 10))" RECOMP_SMOKE_DRAWABLE=3456x2170 \
-  RECOMP_HOST_PROFILE="$out/s" RECOMP_HOST_PROFILE_SPIKE=45 RECOMP_HOST_DUMP_DIR="$out" \
+  RECOMP_HOST_PROFILE="$out/s" RECOMP_HOST_PROFILE_SPIKE=${BENCH_SPIKE:-45} RECOMP_HOST_DUMP_DIR="$out" \
   nohup "$bin" --script "$out/bench.smoke" > "$out/bench.log" 2>&1 &
 pid=$!
 echo "$pid" > "$out/bench.pid"
