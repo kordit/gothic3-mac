@@ -18,6 +18,7 @@
 #include <time.h>
 
 int recomp_memtrace_begin(void);                          /* kit/runtime/memtrace.h */
+uint32_t host_pinned_clock_value(void) __asm__("__Z23host_pinned_clock_valuev"); /* kit/runtime/win32.h */
 void recomp_memtrace_end(const char *label, const char *path);
 
 void recomp_phase_add(const char *name, uint64_t ns); /* kit/dx/d3d9.cpp */
@@ -34,6 +35,7 @@ void g3_phase(const char *name, uint64_t t0) {
 
 static uint32_t mt_frames, mt_done; /* the control text's frames, and how many are traced */
 static uint64_t mt_from;            /* g3_phase_now from which they are */
+static uint32_t mt_from_clock;      /* or the pinned clock from which they are (MEMTRACE=<frames>,t<ms>) */
 static char mt_path[512] = "memtrace.txt";
 
 void g3_memtrace_control(const char *text) {
@@ -52,17 +54,26 @@ void g3_memtrace_control(const char *text) {
     }
     char *end;
     const uint32_t frames = (uint32_t)strtoul(key + 9, &end, 10);
-    const double seconds = *end == ',' ? strtod(end + 1, NULL) : 0;
+    /* <frames>,t<ms>: from the frame whose pinned clock (RECOMP_PIN_CLOCK) reaches <ms>, the same frame in every run
+     * of one script, where seconds of the machine's time are not (session 31: walka's frame 5098, t=83252). */
+    const int by_clock = *end == ',' && end[1] == 't';
+    const double seconds = *end == ',' && !by_clock ? strtod(end + 1, NULL) : 0;
     if (frames != mt_frames || !mt_from) {
         mt_frames = frames;
         mt_done = 0;
         mt_from = g3_phase_now() + (uint64_t)(seconds * 1e9);
-        fprintf(stderr, "g3: memtrace %u frames after %.0f s to %s\n", frames, seconds, mt_path);
+        mt_from_clock = by_clock ? (uint32_t)strtoul(end + 2, NULL, 10) : 0;
+        if (by_clock)
+            fprintf(stderr, "g3: memtrace %u frames from guest clock %u ms to %s\n", frames, mt_from_clock, mt_path);
+        else
+            fprintf(stderr, "g3: memtrace %u frames after %.0f s to %s\n", frames, seconds, mt_path);
     }
 }
 
 /* Process and DoRender of one iteration, traced one after the other while frames are left. */
 int g3_memtrace_frame(void) {
+    if (mt_from_clock)
+        return mt_done < mt_frames && host_pinned_clock_value() >= mt_from_clock;
     return mt_done < mt_frames && g3_phase_now() >= mt_from;
 }
 void g3_memtrace_end(const char *what) {
