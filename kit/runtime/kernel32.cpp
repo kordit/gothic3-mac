@@ -2660,6 +2660,23 @@ double g_prof_since = 0.0;
 std::atomic<uint64_t> g_presents{0};
 uint64_t g_prof_presents = 0;
 void record_handoff_locked(size_t from, size_t to, const char *why) {
+    // RECOMP_PINNED_HANDOFF_TRACE=<from ms>-<to ms> (diagnostics, pinned runs): every hand-off while the pinned clock
+    // is in the range, with the giver's guest return address, so two runs show the first hand-off that differs.
+    static uint32_t ht_from = 0, ht_to = 0;
+    static const bool ht_on = [] {
+        const char *v = recomp_env("PINNED_HANDOFF_TRACE");
+        return v && sscanf(v, "%u-%u", &ht_from, &ht_to) == 2;
+    }();
+    if (ht_on && host_time_source_is_pinned()) {
+        const uint32_t t = host_pinned_clock_value();
+        if (t >= ht_from && t <= ht_to && from < threads().size()) {
+            const GuestThread *g = threads()[from];
+            const X86 *x = g->is_main ? loader_context() : &g->ctx;
+            const uint32_t esp = x ? x->r[R_ESP] : 0;
+            fprintf(stderr, "[sched] handoff clock %u %zu->%zu %s ret %08x calls %u\n", t, from, to, why,
+                    esp ? rd32(esp) : 0, g->pinned_calls);
+        }
+    }
     g_handoffs[g_handoff_count % 16] = Handoff{from, to, why};
     ++g_handoff_count;
     const double now = (double)os_monotonic_ns() * 1e-9;
@@ -3384,6 +3401,8 @@ bool guest_yield() {
     sched_expire_locked();
     size_t next = sched_next_runnable_locked(me->index);
     bool moved = next != NO_THREAD && next != me->index;
+    if (me->is_main && g_pinned_uncounted > 0 && moved)
+        pinned_block_trace_locked(me, "yield");
     uint64_t yield_ns = 0;
     if (moved) {
         const double away = me->last_yield;
