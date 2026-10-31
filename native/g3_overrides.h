@@ -311,4 +311,10 @@ void g3n_102b7190(X86 *c);
 #define FN_102b71b0 g3n_102b71b0 /* Engine eCAudioSystem::FModFreeMemory */
 void g3n_102b71b0(X86 *c);
 
+/* strshare (strshare.c): not a group, always on: a bCString's text is not shared past 0xC000 copies */
+#define FN_10002e20 g3n_10002e20 /* SharedBase bCString::SetText(bCString const &) */
+void g3n_10002e20(X86 *c);
+#define FN_100019e0 g3n_100019e0 /* SharedBase bCString::bCString(bCString const &) */
+void g3n_100019e0(X86 *c);
+
 #endif
