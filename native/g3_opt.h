@@ -24,6 +24,7 @@ enum {
     G3OPT_AOCACHE = 1u << 23, /* aocache: a SpeedTree's ambient occlusion from a result computed offline (aocache.c) */
     G3OPT_FMODOGG = 1u << 24, /* fmodogg: an Ogg Vorbis sample decoded natively before FMOD makes it (fmodogg.c) */
     G3OPT_NAVZONE = 1u << 25, /* navzone: gCNavZone_PS::Test3DPointInZone as one native function (navzone.c) */
+    G3OPT_NOOC = 1u << 27, /* nooc: the engine's occlusion culling off (caps.EnableOcclusionCulling=0, phases.c, D-057) */
     G3OPT_SNAP = 1u << 26, /* snap: the render's writes to the logic's state moved to the end of its gathering (snap.c, D-054); off by default */
     G3OPT_FMODMEM = 1u << 28, /* fmodmem: FMOD's memory from the kit's span, not the game's heap (fmodmem.c); off by default */
 };
