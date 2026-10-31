@@ -283,6 +283,11 @@ void g3n_113bf8d0(X86 *c);
 #define FN_10a27180 g3n_10a27180 /* Game gCNavZone_PS::Test3DPointInZone */
 void g3n_10a27180(X86 *c);
 
+/* findway (findway.c): gCNavigationMap::FindWay as one function, an unreachable destination answered at once instead
+ * of after the original's 3 s breaker (D-058) */
+#define FN_10a41090 g3n_10a41090 /* Game gCNavigationMap::FindWay */
+void g3n_10a41090(X86 *c);
+
 /* snap (snap.c): the render's gathering and execution apart, and its writes to the logic's state moved to the end of
  * the gathering (D-054 points 2 and 3, docs/PLAN.md step 3) */
 #define FN_1040e430 g3n_1040e430 /* Engine eCRenderSystemAdmin::Render */

@@ -27,6 +27,7 @@ enum {
     G3OPT_NOOC = 1u << 27, /* nooc: the engine's occlusion culling off (caps.EnableOcclusionCulling=0, phases.c, D-057) */
     G3OPT_SNAP = 1u << 26, /* snap: the render's writes to the logic's state moved to the end of its gathering (snap.c, D-054); off by default */
     G3OPT_FMODMEM = 1u << 28, /* fmodmem: FMOD's memory from the kit's span, not the game's heap (fmodmem.c); off by default */
+    G3OPT_FINDWAY = 1u << 29, /* findway: gCNavigationMap::FindWay answers an unreachable destination at once (findway.c, D-058) */
 };
 /* The groups the player's game and every bench run without a G3OPT key: all but those still being checked (D-054:
  * snap enters with milestone 7.12). */
