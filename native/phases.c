@@ -94,8 +94,11 @@ static void rw_note(const char *when) {
         armed = v && sscanf(v, "%x,%u,%u", &rw_addr, &rw_from, &rw_to) == 3;
     }
     const uint32_t t = armed ? host_pinned_clock_value() : 0;
+    extern uint32_t g3_snap_sorts, g3_snap_sorted_sum; /* snap.c: DepthSortParticles' sorts since the last note */
     if (armed && t >= rw_from && t <= rw_to)
-        fprintf(stderr, "g3: randwatch clock %u %s render: %08x\n", t, when, rd32(rw_addr));
+        fprintf(stderr, "g3: randwatch clock %u %s render: %08x sorts %u sum %08x\n", t, when, rd32(rw_addr),
+                g3_snap_sorts, g3_snap_sorted_sum);
+    g3_snap_sorts = g3_snap_sorted_sum = 0;
 }
 
 /* Group nooc (D-057): the engine's occlusion culling off, as the console's caps.EnableOcclusionCulling=0 sets it

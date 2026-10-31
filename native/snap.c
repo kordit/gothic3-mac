@@ -16,6 +16,11 @@
 #include <stdio.h>
 
 uint32_t guest_call(X86 *c, uint32_t fn, const uint32_t *args, int nargs) __asm__("__Z10guest_callP3X86jPKji");
+/* kit/runtime/kernel32.cpp: in a pinned run, calls and clock polls inside are not counted. The render system's
+ * entries below are such stretches wherever they are called from, not only inside DoRender (phases.c): the front end
+ * reaches Execute another way, and there the group's extra work (the far view gathered once more) moved where FMOD's
+ * threads got the baton by 6 calls from the menu's first frames on (walka, clock 212), and the logic parted at 4884. */
+void recomp_pinned_uncounted(int on);
 
 void fn_1040e430(X86 *c); /* Engine eCRenderSystemAdmin::Render */
 void fn_10400530(X86 *c); /* Engine eCFrustumDatabase::Execute */
@@ -179,7 +184,13 @@ static int sn_gather(X86 *c, uint32_t db) {
 void fn_10402220(X86 *c); /* Engine eCFrustumDatabase::ExecuteShadowMap */
 uint64_t g3_snap_shadow_gathered;
 
+static void sn_10402220(X86 *c);
 void g3n_10402220(X86 *c) {
+    recomp_pinned_uncounted(1);
+    sn_10402220(c);
+    recomp_pinned_uncounted(0);
+}
+static void sn_10402220(X86 *c) {
     const uint32_t db = c->r[1], outer = sn_gathered_db;
     if (G3OPT(SNAP) && db && rd8(db + 0x1afu) == 0u) {
         uint32_t r[8];
@@ -238,7 +249,13 @@ static void sn_ret(X86 *c, uint32_t args) {
     recomp_return(c);
 }
 
+static void sn_1040e430(X86 *c);
 void g3n_1040e430(X86 *c) {
+    recomp_pinned_uncounted(1);
+    sn_1040e430(c);
+    recomp_pinned_uncounted(0);
+}
+static void sn_1040e430(X86 *c) {
     /* thiscall: ECX the render system admin, [ESP+4] the database */
     const uint32_t admin = c->r[1], db = rd32(c->r[4] + 4u);
     if (G3OPT(SNAP) && !sn_gather_only && db && db == sn_far_db) {
@@ -255,7 +272,13 @@ void g3n_1040e430(X86 *c) {
     fn_1040e430(c);
 }
 
+static void sn_10400530(X86 *c);
 void g3n_10400530(X86 *c) {
+    recomp_pinned_uncounted(1);
+    sn_10400530(c);
+    recomp_pinned_uncounted(0);
+}
+static void sn_10400530(X86 *c) {
     static int depth;
     const uint32_t db = c->r[1], outer = sn_gathered_db;
     if (G3OPT(SNAP) && sn_gather_only) {
@@ -315,6 +338,10 @@ void g3n_10400530(X86 *c) {
                 (unsigned long long)g3_snap_particles_moved, (unsigned long long)g3_snap_particles_left);
 }
 
+/* Every sort DepthSortParticles really makes in a frame, counted with the sum of the emitters' addresses, for
+ * RECOMP_G3_RANDWATCH (phases.c) to print: two runs, snap and the reference, show whether they sort the same emitters. */
+uint32_t g3_snap_sorts, g3_snap_sorted_sum;
+
 void g3n_103afa70(X86 *c) {
     if (!sn_presorting && sn_nsorted && sn_presorted(c->r[1])) {
         c->eip = rd32(c->r[4]); /* RET: thiscall, no arguments */
@@ -324,6 +351,8 @@ void g3n_103afa70(X86 *c) {
     }
     if (G3OPT(SNAP) && !sn_presorting)
         ++g3_snap_particles_left;
+    ++g3_snap_sorts;
+    g3_snap_sorted_sum += c->r[1];
     fn_103afa70(c);
 }
 
